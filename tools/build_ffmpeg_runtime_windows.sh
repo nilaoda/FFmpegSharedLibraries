@@ -10,6 +10,8 @@ set -euo pipefail
 FFMPEG_VERSION="${1:?usage: build_ffmpeg_runtime_windows.sh <ffmpeg-version> <gpl|lgpl> [work-root] }"
 LICENSE_FLAVOR="${2:?usage: build_ffmpeg_runtime_windows.sh <ffmpeg-version> <gpl|lgpl> [work-root] }"
 WORK_ROOT="${3:-$PWD/.ffmpeg-runtime-build-win64}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 case "$LICENSE_FLAVOR" in
   gpl|lgpl)
@@ -35,6 +37,7 @@ UAVS3D_INSTALL_ROOT="$WORK_ROOT/uavs3d-install"
 DAVS2_SOURCE_DIR="$SOURCE_ROOT/davs2"
 DAVS2_BUILD_DIR="$DAVS2_SOURCE_DIR/build"
 DAVS2_INSTALL_ROOT="$WORK_ROOT/davs2-install"
+DAVS2_PATCH_PATH="$REPO_ROOT/patches/davs2-10bit/0001-fix-10bit-build-on-modern-msys2.patch"
 INSTALL_ROOT="$WORK_ROOT/install"
 PACKAGE_ROOT="$WORK_ROOT/package"
 RUNTIME_ROOT="$PACKAGE_ROOT"
@@ -135,6 +138,19 @@ if [[ "$LICENSE_FLAVOR" == "gpl" ]]; then
   git -C "$DAVS2_SOURCE_DIR" fetch --depth 1 origin "$DAVS2_GIT_REF"
   git -C "$DAVS2_SOURCE_DIR" checkout --detach FETCH_HEAD
 
+  if [[ ! -f "$DAVS2_PATCH_PATH" ]]; then
+    echo "Missing davs2 patch file: $DAVS2_PATCH_PATH" >&2
+    exit 1
+  fi
+
+  if ! git -C "$DAVS2_SOURCE_DIR" apply --check "$DAVS2_PATCH_PATH"; then
+    git -C "$DAVS2_SOURCE_DIR" apply --check --ignore-space-change --ignore-whitespace "$DAVS2_PATCH_PATH"
+  fi
+
+  if ! git -C "$DAVS2_SOURCE_DIR" apply "$DAVS2_PATCH_PATH"; then
+    git -C "$DAVS2_SOURCE_DIR" apply --ignore-space-change --ignore-whitespace "$DAVS2_PATCH_PATH"
+  fi
+
   DAVS2_CONFIGURE_DIR=""
   while IFS= read -r configure_path; do
     DAVS2_CONFIGURE_DIR="$(dirname "$configure_path")"
@@ -144,16 +160,6 @@ if [[ "$LICENSE_FLAVOR" == "gpl" ]]; then
   if [[ -z "$DAVS2_CONFIGURE_DIR" ]]; then
     echo "Could not locate davs2 configure script under $DAVS2_BUILD_DIR" >&2
     exit 1
-  fi
-
-  if grep -q 'BitDepth \$bit_depth not supported currently\.' "$DAVS2_CONFIGURE_DIR/configure"; then
-    awk '
-      /elif \[\[ "\$bit_depth" = "9" \|\| "\$bit_depth" = "10" \]\]; then/ {skip=2; next}
-      skip > 0 {skip--; next}
-      {print}
-    ' "$DAVS2_CONFIGURE_DIR/configure" >"$DAVS2_CONFIGURE_DIR/configure.patched"
-    mv "$DAVS2_CONFIGURE_DIR/configure.patched" "$DAVS2_CONFIGURE_DIR/configure"
-    chmod +x "$DAVS2_CONFIGURE_DIR/configure"
   fi
 
   pushd "$DAVS2_CONFIGURE_DIR" >/dev/null
@@ -166,6 +172,28 @@ if [[ "$LICENSE_FLAVOR" == "gpl" ]]; then
   make -j"$CPU_COUNT"
   make install-lib-static
   popd >/dev/null
+
+  DAVS2_PKG_CONFIG_FILE="$DAVS2_INSTALL_ROOT/lib/pkgconfig/davs2.pc"
+  mkdir -p "$(dirname "$DAVS2_PKG_CONFIG_FILE")"
+  cat >"$DAVS2_PKG_CONFIG_FILE" <<EOF
+prefix=$DAVS2_INSTALL_ROOT
+exec_prefix=\${prefix}
+libdir=\${exec_prefix}/lib
+includedir=\${prefix}/include
+
+Name: davs2
+Description: AVS2 (IEEE 1857.4) decoder library
+Version: 1.6.0
+Libs: -L\${libdir} -ldavs2 -lstdc++ -lwinpthread
+Cflags: -I\${includedir}
+EOF
+
+  DAVS2_PKG_VERSION="$(PKG_CONFIG_PATH="$DAVS2_INSTALL_ROOT/lib/pkgconfig" "$PKG_CONFIG_BIN" --modversion davs2 || true)"
+  echo "Detected davs2 pkg-config version: ${DAVS2_PKG_VERSION:-unknown}"
+  if ! PKG_CONFIG_PATH="$DAVS2_INSTALL_ROOT/lib/pkgconfig" "$PKG_CONFIG_BIN" --exists 'davs2 >= 1.6.0'; then
+    echo "davs2 pkg-config version requirement (>= 1.6.0) is not satisfied" >&2
+    exit 1
+  fi
 
   if [[ ! -f "$DAVS2_INSTALL_ROOT/lib/libdavs2.a" ]]; then
     echo "Static libdavs2 archive was not produced" >&2
@@ -228,7 +256,15 @@ if [[ "$ENABLE_LIBDAVS2" == true ]]; then
   CONFIGURE_FLAGS+=(--enable-libdavs2)
 fi
 
-./configure "${CONFIGURE_FLAGS[@]}"
+if ! ./configure "${CONFIGURE_FLAGS[@]}"; then
+  if [[ -f ffbuild/config.log ]]; then
+    echo "===== ffbuild/config.log (tail 400) =====" >&2
+    tail -n 400 ffbuild/config.log >&2
+  else
+    echo "ffbuild/config.log was not generated" >&2
+  fi
+  exit 1
+fi
 make -j"$CPU_COUNT"
 make install
 
