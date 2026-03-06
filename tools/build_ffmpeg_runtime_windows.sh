@@ -24,12 +24,17 @@ ARCHIVE_NAME="ffmpeg-$FFMPEG_VERSION.tar.xz"
 SOURCE_URL="https://ffmpeg.org/releases/$ARCHIVE_NAME"
 UAVS3D_GIT_URL="https://github.com/uavs3/uavs3d.git"
 UAVS3D_GIT_REF="0e20d2c291853f196c68922a264bcd8471d75b68"
+DAVS2_GIT_URL="https://github.com/xatabhk/davs2-10bit.git"
+DAVS2_GIT_REF="21d64c8f8e36af71fc7a488cd6f789c86cdd1200"
 SOURCE_ROOT="$WORK_ROOT/src"
 SOURCE_ARCHIVE="$SOURCE_ROOT/$ARCHIVE_NAME"
 SOURCE_DIR="$SOURCE_ROOT/ffmpeg-$FFMPEG_VERSION"
 UAVS3D_SOURCE_DIR="$SOURCE_ROOT/uavs3d"
 UAVS3D_BUILD_DIR="$UAVS3D_SOURCE_DIR/build/cmake"
 UAVS3D_INSTALL_ROOT="$WORK_ROOT/uavs3d-install"
+DAVS2_SOURCE_DIR="$SOURCE_ROOT/davs2"
+DAVS2_BUILD_DIR="$DAVS2_SOURCE_DIR/build"
+DAVS2_INSTALL_ROOT="$WORK_ROOT/davs2-install"
 INSTALL_ROOT="$WORK_ROOT/install"
 PACKAGE_ROOT="$WORK_ROOT/package"
 RUNTIME_ROOT="$PACKAGE_ROOT"
@@ -38,6 +43,7 @@ PACKAGE_NAME="ffmpeg-runtime-win64-$LICENSE_FLAVOR-shared-$FFMPEG_VERSION"
 ARTIFACT_PATH="$ARTIFACT_ROOT/$PACKAGE_NAME.zip"
 PKG_CONFIG_BIN="${PKG_CONFIG_BIN:-pkgconf}"
 CPU_COUNT="$(nproc)"
+ENABLE_LIBDAVS2=false
 
 LIBRARY_NAMES=(
   avutil-59.dll
@@ -76,7 +82,7 @@ fi
 rm -rf "$SOURCE_DIR"
 tar -xf "$SOURCE_ARCHIVE" -C "$SOURCE_ROOT"
 
-rm -rf "$INSTALL_ROOT" "$PACKAGE_ROOT" "$UAVS3D_INSTALL_ROOT" "$UAVS3D_SOURCE_DIR"
+rm -rf "$INSTALL_ROOT" "$PACKAGE_ROOT" "$UAVS3D_INSTALL_ROOT" "$UAVS3D_SOURCE_DIR" "$DAVS2_INSTALL_ROOT" "$DAVS2_SOURCE_DIR"
 mkdir -p "$INSTALL_ROOT" "$RUNTIME_ROOT" "$UAVS3D_INSTALL_ROOT"
 
 git init "$UAVS3D_SOURCE_DIR" >/dev/null
@@ -121,8 +127,67 @@ Cflags: -I\${includedir}
 EOF
 fi
 
-export PKG_CONFIG_PATH="$UAVS3D_INSTALL_ROOT/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
-export CPPFLAGS="-I$UAVS3D_INSTALL_ROOT/include${CPPFLAGS:+ $CPPFLAGS}"
+if [[ "$LICENSE_FLAVOR" == "gpl" ]]; then
+  ENABLE_LIBDAVS2=true
+
+  git init "$DAVS2_SOURCE_DIR" >/dev/null
+  git -C "$DAVS2_SOURCE_DIR" remote add origin "$DAVS2_GIT_URL"
+  git -C "$DAVS2_SOURCE_DIR" fetch --depth 1 origin "$DAVS2_GIT_REF"
+  git -C "$DAVS2_SOURCE_DIR" checkout --detach FETCH_HEAD
+
+  DAVS2_CONFIGURE_DIR=""
+  while IFS= read -r configure_path; do
+    DAVS2_CONFIGURE_DIR="$(dirname "$configure_path")"
+    break
+  done < <(find "$DAVS2_BUILD_DIR" -maxdepth 2 -type f -name configure | sort)
+
+  if [[ -z "$DAVS2_CONFIGURE_DIR" ]]; then
+    echo "Could not locate davs2 configure script under $DAVS2_BUILD_DIR" >&2
+    exit 1
+  fi
+
+  if grep -q 'BitDepth \$bit_depth not supported currently\.' "$DAVS2_CONFIGURE_DIR/configure"; then
+    awk '
+      /elif \[\[ "\$bit_depth" = "9" \|\| "\$bit_depth" = "10" \]\]; then/ {skip=2; next}
+      skip > 0 {skip--; next}
+      {print}
+    ' "$DAVS2_CONFIGURE_DIR/configure" >"$DAVS2_CONFIGURE_DIR/configure.patched"
+    mv "$DAVS2_CONFIGURE_DIR/configure.patched" "$DAVS2_CONFIGURE_DIR/configure"
+    chmod +x "$DAVS2_CONFIGURE_DIR/configure"
+  fi
+
+  pushd "$DAVS2_CONFIGURE_DIR" >/dev/null
+  ./configure \
+    --prefix="$DAVS2_INSTALL_ROOT" \
+    --disable-cli \
+    --disable-shared \
+    --enable-pic \
+    --bit-depth=10
+  make -j"$CPU_COUNT"
+  make install-lib-static
+  popd >/dev/null
+
+  if [[ ! -f "$DAVS2_INSTALL_ROOT/lib/libdavs2.a" ]]; then
+    echo "Static libdavs2 archive was not produced" >&2
+    exit 1
+  fi
+
+  if find "$DAVS2_INSTALL_ROOT" -type f \( -name 'libdavs2*.dll' -o -name 'davs2*.dll' \) | grep -q .; then
+    echo "Dynamic libdavs2 artifacts were produced unexpectedly" >&2
+    exit 1
+  fi
+fi
+
+PKG_CONFIG_PATH_ENTRIES=("$UAVS3D_INSTALL_ROOT/lib/pkgconfig")
+CPPFLAGS_ENTRIES=("-I$UAVS3D_INSTALL_ROOT/include")
+
+if [[ "$ENABLE_LIBDAVS2" == true ]]; then
+  PKG_CONFIG_PATH_ENTRIES+=("$DAVS2_INSTALL_ROOT/lib/pkgconfig")
+  CPPFLAGS_ENTRIES+=("-I$DAVS2_INSTALL_ROOT/include")
+fi
+
+export PKG_CONFIG_PATH="$(IFS=:; echo "${PKG_CONFIG_PATH_ENTRIES[*]}")${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+export CPPFLAGS="${CPPFLAGS_ENTRIES[*]}${CPPFLAGS:+ $CPPFLAGS}"
 
 pushd "$SOURCE_DIR" >/dev/null
 
@@ -159,6 +224,9 @@ if [[ "$LICENSE_FLAVOR" == "gpl" ]]; then
 fi
 
 CONFIGURE_FLAGS+=(--enable-libuavs3d)
+if [[ "$ENABLE_LIBDAVS2" == true ]]; then
+  CONFIGURE_FLAGS+=(--enable-libdavs2)
+fi
 
 ./configure "${CONFIGURE_FLAGS[@]}"
 make -j"$CPU_COUNT"
@@ -200,6 +268,12 @@ is_system_dll() {
   echo "Enable libuavs3d: true"
   echo "libuavs3d linkage: static"
   echo "libuavs3d revision: $UAVS3D_GIT_REF"
+  echo "Enable libdavs2: $ENABLE_LIBDAVS2"
+  if [[ "$ENABLE_LIBDAVS2" == true ]]; then
+    echo "libdavs2 linkage: static"
+    echo "libdavs2 revision: $DAVS2_GIT_REF"
+    echo "libdavs2 bit depth: 10"
+  fi
   echo "Built on: $(date -u +"%Y-%m-%dT%H:%M:%SZ")"
   echo
   echo "Configure flags:"
