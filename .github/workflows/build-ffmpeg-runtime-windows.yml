@@ -1,0 +1,61 @@
+name: Build Windows FFmpeg Runtime
+
+on:
+  workflow_dispatch:
+    inputs:
+      ffmpeg_version:
+        description: FFmpeg 7.x version to build
+        required: true
+        default: 7.1.3
+      license_flavor:
+        description: Runtime license flavor
+        required: true
+        type: choice
+        default: gpl
+        options:
+          - gpl
+          - lgpl
+
+jobs:
+  build-win64-runtime:
+    name: Build FFmpeg Runtime [win64]
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup MSYS2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            diffutils
+            git
+            make
+            zip
+            mingw-w64-x86_64-binutils
+            mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-nasm
+            mingw-w64-x86_64-ninja
+            mingw-w64-x86_64-pkgconf
+            mingw-w64-x86_64-yasm
+
+      - name: Build runtime
+        shell: msys2 {0}
+        run: |
+          chmod +x tools/build_ffmpeg_runtime_windows.sh
+          WORK_ROOT="$(cygpath -u "$RUNNER_TEMP")/ffmpeg-runtime-build"
+          tools/build_ffmpeg_runtime_windows.sh \
+            "${{ github.event.inputs.ffmpeg_version }}" \
+            "${{ github.event.inputs.license_flavor }}" \
+            "$WORK_ROOT"
+
+      - name: Upload runtime artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ffmpeg-runtime-win64-${{ github.event.inputs.license_flavor }}-shared-${{ github.event.inputs.ffmpeg_version }}
+          path: ${{ runner.temp }}\ffmpeg-runtime-build\artifacts\*.zip
+          if-no-files-found: error
+          retention-days: 14
