@@ -1,6 +1,6 @@
 # FFmpegSharedLibraries
 
-GitHub Actions workflows for building FFmpeg shared-library runtimes with `libuavs3d` enabled.
+GitHub Actions workflows for building FFmpeg shared-library runtimes with `libuavs3d` and optional `libdavs2` (from `davs2-10bit`) support.
 
 ## Outputs
 
@@ -8,7 +8,11 @@ GitHub Actions workflows for building FFmpeg shared-library runtimes with `libua
 - `windows-latest`: win64 `.dll`
 - `ubuntu-latest`: linux x64 `.so`
 
-Each workflow builds FFmpeg shared libraries only. `libuavs3d` is built from source as a static dependency and linked into FFmpeg, so the runtime artifacts do not include separate `libuavs3d` dynamic libraries.
+Each workflow builds FFmpeg shared libraries only.
+
+- `libuavs3d` is always built from source as a static dependency and linked into FFmpeg.
+- `libdavs2` (from `davs2-10bit`, bit depth 10) is built and enabled when `license_flavor=gpl`.
+- Runtime artifacts do not include separate `libuavs3d`/`libdavs2` dynamic libraries.
 
 ## Workflow Inputs
 
