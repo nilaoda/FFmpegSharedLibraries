@@ -147,12 +147,18 @@ if [[ "$LICENSE_FLAVOR" == "gpl" ]]; then
   fi
 
   pushd "$DAVS2_CONFIGURE_DIR" >/dev/null
-  ./configure \
+  if ! CC=clang CXX=clang++ ./configure \
+    --host=aarch64-apple-darwin \
     --prefix="$DAVS2_INSTALL_ROOT" \
     --disable-cli \
-    --disable-shared \
     --enable-pic \
-    --bit-depth=10
+    --bit-depth=10; then
+    if [[ -f config.log ]]; then
+      echo "===== davs2 config.log (tail 400) =====" >&2
+      tail -n 400 config.log >&2
+    fi
+    exit 1
+  fi
   make -j"$CPU_COUNT"
   make install-lib-static
   popd >/dev/null
