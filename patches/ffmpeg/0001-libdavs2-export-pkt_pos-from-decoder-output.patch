@@ -1,0 +1,19 @@
+diff --git a/libavcodec/libdavs2.c b/libavcodec/libdavs2.c
+--- a/libavcodec/libdavs2.c
++++ b/libavcodec/libdavs2.c
+@@ -140,6 +140,7 @@ static int davs2_dump_frames(AVCodecContext *avctx, davs2_picture_t *pic, int *
+     frame->height    = cad->headerset.height;
+     frame->pts       = cad->out_frame.pts;
+     frame->format    = avctx->pix_fmt;
++    frame->pkt_pos   = cad->out_frame.pos;
+ 
+     *got_frame = 1;
+     return 0;
+@@ -219,6 +220,7 @@ static int davs2_decode_frame(AVCodecContext *avctx, AVFrame *frame,
+     cad->packet.len  = buf_size;
+     cad->packet.pts  = avpkt->pts;
+     cad->packet.dts  = avpkt->dts;
++    cad->packet.pos  = avpkt->pos;
+ 
+     ret = davs2_decoder_send_packet(cad->decoder, &cad->packet);
+ 
