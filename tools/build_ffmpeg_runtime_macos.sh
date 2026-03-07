@@ -39,6 +39,7 @@ DAVS2_BUILD_DIR="$DAVS2_SOURCE_DIR/build"
 DAVS2_INSTALL_ROOT="$WORK_ROOT/davs2-install"
 DAVS2_PATCH_PATH="$REPO_ROOT/patches/davs2-10bit/0001-enable-10bit-build-and-propagate-frame-packet-position.patch"
 FFMPEG_DAVS2_PATCH_PATH="$REPO_ROOT/patches/ffmpeg/0001-libdavs2-export-pkt_pos-from-decoder-output.patch"
+FFMPEG_CAVS_DRA_MACOS_PATCH_PATH="$REPO_ROOT/patches/ffmpeg/0002-libcavs-fix-macos-build-compat.patch"
 DEFAULT_CAVS_DRA_PATCH_PATH="/Users/macmini/code/GitHub/ffmpeg_cavs_dra/ffmpeg-7.1.2_cavs_dra.patch"
 CAVS_DRA_GIT_URL="https://github.com/maliwen2015/ffmpeg_cavs_dra.git"
 CAVS_DRA_GIT_REF="${CAVS_DRA_GIT_REF:-abae276fed97ce08928f25c8f5e03fd915687f54}"
@@ -240,6 +241,19 @@ fi
 
 if ! git -C "$SOURCE_DIR" apply -p2 "$FFMPEG_CAVS_DRA_PATCH_PATH" 2>/dev/null; then
   git -C "$SOURCE_DIR" apply -p2 --recount --ignore-space-change --ignore-whitespace "$FFMPEG_CAVS_DRA_PATCH_PATH"
+fi
+
+if [[ ! -f "$FFMPEG_CAVS_DRA_MACOS_PATCH_PATH" ]]; then
+  echo "Missing FFmpeg cavs/dra macOS patch file: $FFMPEG_CAVS_DRA_MACOS_PATCH_PATH" >&2
+  exit 1
+fi
+
+if ! git -C "$SOURCE_DIR" apply --check "$FFMPEG_CAVS_DRA_MACOS_PATCH_PATH" 2>/dev/null; then
+  git -C "$SOURCE_DIR" apply --check --recount --ignore-space-change --ignore-whitespace "$FFMPEG_CAVS_DRA_MACOS_PATCH_PATH"
+fi
+
+if ! git -C "$SOURCE_DIR" apply "$FFMPEG_CAVS_DRA_MACOS_PATCH_PATH" 2>/dev/null; then
+  git -C "$SOURCE_DIR" apply --recount --ignore-space-change --ignore-whitespace "$FFMPEG_CAVS_DRA_MACOS_PATCH_PATH"
 fi
 
 PKG_CONFIG_PATH_ENTRIES=("$UAVS3D_INSTALL_ROOT/lib/pkgconfig")
