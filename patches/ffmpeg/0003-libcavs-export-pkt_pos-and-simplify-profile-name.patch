@@ -1,0 +1,115 @@
+diff --git a/libavcodec/libcavsdec.c b/libavcodec/libcavsdec.c
+index fd52c3b..35c2daa 100644
+--- a/libavcodec/libcavsdec.c
++++ b/libavcodec/libcavsdec.c
+@@ -99,6 +99,8 @@ typedef struct AVSContext {
+     int output_type; /* mark type of output frame */
+     int b_delay_frame;
+     int b_last_delay_frame;
++
++    int64_t current_packet_pos;
+ 
+        int last_frame_error; /* default 0 */
+     int last_frame_type;
+@@ -257,6 +259,7 @@ static int cavs_decode_pic(AVSContext *h, int *ret_val)
+         if( i_result == CAVS_FRAME_OUT )
+         {
+             decoder_get_cur_frame( h->cur.f, &h->param );
++            h->cur.f->pkt_pos = h->current_packet_pos;
+          
+             if ( h->output_type  != AV_PICTURE_TYPE_B )
+             {           
+@@ -295,6 +298,7 @@ static int cavs_decode_pic(AVSContext *h, int *ret_val)
+         if( i_result == CAVS_FRAME_OUT )
+         {
+             decoder_get_cur_frame( h->cur.f, &h->param );
++            h->cur.f->pkt_pos = h->current_packet_pos;
+          
+             if (h->cur.f->pict_type != AV_PICTURE_TYPE_B)
+             {           
+@@ -374,6 +378,18 @@ static void cavs_flush(AVCodecContext * avctx)
+ {
+     AVSContext *h = avctx->priv_data;
+     h->got_keyframe = 0;
++    h->b_last_delay_frame = 0;
++    h->b_delay_frame = 0;
++    h->last_frame_error = 0;
++    h->current_packet_pos = -1;
++    h->param.output_type = -1;
++
++    av_frame_unref(h->cur.f);
++    av_frame_unref(h->DPB[0].f);
++    av_frame_unref(h->DPB[1].f);
++
++    if (h->p_decoder && h->param.seq_header_flag)
++        cavs_decoder_seq_header_reset_pipeline(h->p_decoder);
+ }
+ 
+ static int cavs_decoder_param_init( AVSContext *h )
+@@ -408,6 +424,7 @@ static int cavs_decode_frame(AVCodecContext *avctx, AVFrame *frame, int *got_fra
+     int i_pass_idr = 0;
+     int b_delay_out = 0;
+     int i_first_adr = 0;
++    h->current_packet_pos = avpkt->pos;
+ 
+     /* probe frame or field decoded format */
+     if( !h->b_probe_flag && buf_size != 0 ) /* first probe flag, when finish set it to 1 */
+@@ -544,6 +561,7 @@ static int cavs_decode_frame(AVCodecContext *avctx, AVFrame *frame, int *got_fra
+                     return ret;
+ 
+                     decoder_get_cur_frame( h->cur.f, &h->param );
++                    h->cur.f->pkt_pos = h->current_packet_pos;
+                     *got_frame = 1;
+                     av_frame_move_ref(frame, h->cur.f);
+                      
+@@ -559,6 +577,7 @@ static int cavs_decode_frame(AVCodecContext *avctx, AVFrame *frame, int *got_fra
+             {
+                 
+                 decoder_get_cur_frame( h->DPB[0].f, &h->param );
++                h->DPB[0].f->pkt_pos = h->current_packet_pos;
+                 *got_frame = 1;
+                 av_frame_move_ref(frame, h->DPB[0].f);
+                                frame->flags = h->b_interlaced ? AV_FRAME_FLAG_INTERLACED : 0;
+@@ -736,6 +755,7 @@ static int cavs_decode_frame(AVCodecContext *avctx, AVFrame *frame, int *got_fra
+                             
+                             /* set h->cur.f */
+                             decoder_get_cur_frame( h->cur.f, &h->param );
++                            h->cur.f->pkt_pos = h->current_packet_pos;
+ 
+                             *got_frame = 1;
+                             av_frame_move_ref(frame, h->cur.f);
+@@ -788,7 +808,7 @@ static int cavs_decode_frame(AVCodecContext *avctx, AVFrame *frame, int *got_fra
+ 
+ const FFCodec ff_cavs_decoder = {
+     .p.name           = "cavs",    
+-    .p.long_name    = NULL_IF_CONFIG_SMALL("Chinese AVS (Audio Video Standard) (AVS1-P2, JiZhun profile) and (AVS1-P16, Guangdian profile)"),
++    .p.long_name    = NULL_IF_CONFIG_SMALL("Chinese AVS (Audio Video Standard)"),
+     .p.type           = AVMEDIA_TYPE_VIDEO,
+     .p.id             = AV_CODEC_ID_CAVS,
+     .priv_data_size = sizeof(AVSContext),
+diff --git a/libavcodec/codec_desc.c b/libavcodec/codec_desc.c
+index 393df07..358de0b 100644
+--- a/libavcodec/codec_desc.c
++++ b/libavcodec/codec_desc.c
+@@ -658,7 +658,7 @@ static const AVCodecDescriptor codec_descriptors[] = {
+         .id        = AV_CODEC_ID_CAVS,
+         .type      = AVMEDIA_TYPE_VIDEO,
+         .name      = "cavs",
+-        .long_name = NULL_IF_CONFIG_SMALL("Chinese AVS (Audio Video Standard) (AVS1-P2, JiZhun profile)"),
++        .long_name = NULL_IF_CONFIG_SMALL("Chinese AVS (Audio Video Standard)"),
+         .props     = AV_CODEC_PROP_LOSSY | AV_CODEC_PROP_REORDER,
+     },
+     {
+diff --git a/libavcodec/cavsdec.c b/libavcodec/cavsdec.c
+index 3cf8c9f..2792b39 100644
+--- a/libavcodec/cavsdec.c
++++ b/libavcodec/cavsdec.c
+@@ -1322,7 +1322,7 @@ static int cavs_decode_frame(AVCodecContext *avctx, AVFrame *rframe,
+ 
+ const FFCodec ff_cavs_decoder = {
+     .p.name         = "cavs",
+-    CODEC_LONG_NAME("Chinese AVS (Audio Video Standard) (AVS1-P2, JiZhun profile)"),
++    CODEC_LONG_NAME("Chinese AVS (Audio Video Standard)"),
+     .p.type         = AVMEDIA_TYPE_VIDEO,
+     .p.id           = AV_CODEC_ID_CAVS,
+     .priv_data_size = sizeof(AVSContext),

@@ -39,6 +39,7 @@ DAVS2_BUILD_DIR="$DAVS2_SOURCE_DIR/build"
 DAVS2_INSTALL_ROOT="$WORK_ROOT/davs2-install"
 DAVS2_PATCH_PATH="$REPO_ROOT/patches/davs2-10bit/0001-enable-10bit-build-and-propagate-frame-packet-position.patch"
 FFMPEG_DAVS2_PATCH_PATH="$REPO_ROOT/patches/ffmpeg/0001-libdavs2-export-pkt_pos-from-decoder-output.patch"
+FFMPEG_CAVS_DRA_FIX_PATCH_PATH="$REPO_ROOT/patches/ffmpeg/0003-libcavs-export-pkt_pos-and-simplify-profile-name.patch"
 DEFAULT_CAVS_DRA_PATCH_PATH="/Users/macmini/code/GitHub/ffmpeg_cavs_dra/ffmpeg-7.1.2_cavs_dra.patch"
 CAVS_DRA_GIT_URL="https://github.com/maliwen2015/ffmpeg_cavs_dra.git"
 CAVS_DRA_GIT_REF="${CAVS_DRA_GIT_REF:-abae276fed97ce08928f25c8f5e03fd915687f54}"
@@ -245,6 +246,23 @@ fi
 
 if ! git -C "$SOURCE_DIR" apply -p2 "$FFMPEG_CAVS_DRA_PATCH_PATH" 2>/dev/null; then
   git -C "$SOURCE_DIR" apply -p2 --recount --ignore-space-change --ignore-whitespace "$FFMPEG_CAVS_DRA_PATCH_PATH"
+fi
+
+if [[ ! -f "$FFMPEG_CAVS_DRA_FIX_PATCH_PATH" ]]; then
+  echo "Missing FFmpeg cavs/dra fix patch file: $FFMPEG_CAVS_DRA_FIX_PATCH_PATH" >&2
+  exit 1
+fi
+
+for source_file in \
+  "$SOURCE_DIR/libavcodec/libcavsdec.c" \
+  "$SOURCE_DIR/libavcodec/codec_desc.c" \
+  "$SOURCE_DIR/libavcodec/cavsdec.c"; do
+  perl -i -pe 's/\r$//' "$source_file"
+done
+
+if ! patch -d "$SOURCE_DIR" -p1 --batch --forward -N -l <"$FFMPEG_CAVS_DRA_FIX_PATCH_PATH"; then
+  echo "Failed to apply FFmpeg cavs/dra fix patch: $FFMPEG_CAVS_DRA_FIX_PATCH_PATH" >&2
+  exit 1
 fi
 
 PKG_CONFIG_PATH_ENTRIES=("$UAVS3D_INSTALL_ROOT/lib/pkgconfig")
