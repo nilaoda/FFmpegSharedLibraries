@@ -1,0 +1,357 @@
+diff --git a/libavcodec/libcavsdec.c b/libavcodec/libcavsdec.c
+--- a/libavcodec/libcavsdec.c
++++ b/libavcodec/libcavsdec.c
+@@ -65,6 +65,7 @@
+ 
+ typedef struct AVSFrame {
+     AVFrame *f;
++    AVPacket pkt;
+     int poc;
+ } AVSFrame;
+ 
+@@ -101,6 +102,8 @@ typedef struct AVSContext {
+     int b_last_delay_frame;
+ 
+     int64_t current_packet_pos;
++    AVPacket current_packet;
++    int64_t last_output_pts;
+ 	
+ 	int last_frame_error; /* default 0 */
+     int last_frame_type;
+@@ -147,12 +150,19 @@ av_cold int ff_libcavs_init(AVCodecContext *avctx) {
+     
+     h->last_frame_error= 0;
+     h->probe_keyframe = 0;
++    h->current_packet_pos = -1;
++    h->last_output_pts = AV_NOPTS_VALUE;
+ 	
+     return 0;
+ }
+ 
+ av_cold int ff_libcavs_end(AVCodecContext *avctx) {
+     AVSContext *h = avctx->priv_data;
++
++    av_packet_unref(&h->current_packet);
++    av_packet_unref(&h->cur.pkt);
++    av_packet_unref(&h->DPB[0].pkt);
++    av_packet_unref(&h->DPB[1].pkt);
+     
+     av_frame_free(&h->cur.f);
+     av_frame_free(&h->DPB[0].f);
+@@ -221,6 +231,65 @@ static int decoder_get_cur_frame( AVFrame *frame, cavs_param * param)
+     return 0;
+ }
+ 
++static int cavs_set_frame_packet(AVSFrame *avs_frame, const AVPacket *pkt)
++{
++    av_packet_unref(&avs_frame->pkt);
++
++    if (!pkt)
++        return 0;
++
++    return av_packet_ref(&avs_frame->pkt, pkt);
++}
++
++static int64_t cavs_pts_step(const AVCodecContext *avctx)
++{
++    int64_t step = 1;
++
++    if (avctx->framerate.num > 0 && avctx->framerate.den > 0 &&
++        avctx->pkt_timebase.num > 0 && avctx->pkt_timebase.den > 0) {
++        step = av_rescale_q(1, av_inv_q(avctx->framerate), avctx->pkt_timebase);
++        if (step <= 0)
++            step = 1;
++    }
++
++    return step;
++}
++
++static int cavs_finalize_output_frame(AVSContext *h, AVFrame *frame,
++                                      const AVSFrame *src)
++{
++    int ret;
++    int64_t pts;
++
++    ret = ff_decode_frame_props_from_pkt(h->avctx, frame, &src->pkt);
++    if (ret < 0)
++        return ret;
++
++    frame->pkt_dts = src->pkt.dts;
++    frame->pict_type = src->f->pict_type;
++
++    frame->flags &= ~(AV_FRAME_FLAG_KEY | AV_FRAME_FLAG_INTERLACED);
++    if (frame->pict_type == AV_PICTURE_TYPE_I)
++        frame->flags |= AV_FRAME_FLAG_KEY;
++    if (h->b_interlaced)
++        frame->flags |= AV_FRAME_FLAG_INTERLACED;
++
++    pts = frame->pts;
++    if (pts == AV_NOPTS_VALUE)
++        pts = frame->pkt_dts;
++
++    if (pts != AV_NOPTS_VALUE &&
++        h->last_output_pts != AV_NOPTS_VALUE &&
++        pts <= h->last_output_pts)
++        pts = h->last_output_pts + cavs_pts_step(h->avctx);
++
++    frame->pts = pts;
++    if (pts != AV_NOPTS_VALUE)
++        h->last_output_pts = pts;
++
++    return 0;
++}
++
+ static int cavs_decode_pic(AVSContext *h, int *ret_val)
+ {
+     int ret;
+@@ -230,6 +299,7 @@ static int cavs_decode_pic(AVSContext *h, int *ret_val)
+     {
+         i_result = cavs_decode_one_frame( h->p_decoder, h->stc, &h->param, h->buf, h->length );
+         av_frame_unref(h->cur.f);
++        av_packet_unref(&h->cur.pkt);
+         
+         h->output_type = h->param.output_type;
+         switch( h->output_type )
+@@ -259,11 +329,14 @@ static int cavs_decode_pic(AVSContext *h, int *ret_val)
+         if( i_result == CAVS_FRAME_OUT )
+         {
+             decoder_get_cur_frame( h->cur.f, &h->param );
+-            h->cur.f->pkt_pos = h->current_packet_pos;
++            h->cur.f->pict_type = h->output_type;
++            if ((ret = cavs_set_frame_packet(&h->cur, &h->current_packet)) < 0)
++                return ret;
+          
+             if ( h->output_type  != AV_PICTURE_TYPE_B )
+             {           
+                 av_frame_unref(h->DPB[1].f);
++                av_packet_unref(&h->DPB[1].pkt);
+                 FFSWAP(AVSFrame, h->cur, h->DPB[1]);
+                 FFSWAP(AVSFrame, h->DPB[0], h->DPB[1]);  
+             }  
+@@ -277,6 +350,7 @@ static int cavs_decode_pic(AVSContext *h, int *ret_val)
+     {
+         i_result = cavs_decode_one_frame( h->p_decoder, h->stc, &h->param, h->buf, h->length );
+         av_frame_unref(h->cur.f);
++        av_packet_unref(&h->cur.pkt);
+ 
+         if (h->stc == PIC_PB_START_CODE) {
+             h->cur.f->pict_type = cavs_decoder_cur_frame_type( h->p_decoder ) + AV_PICTURE_TYPE_I;
+@@ -298,11 +372,13 @@ static int cavs_decode_pic(AVSContext *h, int *ret_val)
+         if( i_result == CAVS_FRAME_OUT )
+         {
+             decoder_get_cur_frame( h->cur.f, &h->param );
+-            h->cur.f->pkt_pos = h->current_packet_pos;
++            if ((ret = cavs_set_frame_packet(&h->cur, &h->current_packet)) < 0)
++                return ret;
+          
+             if (h->cur.f->pict_type != AV_PICTURE_TYPE_B)
+             {           
+                 av_frame_unref(h->DPB[1].f);
++                av_packet_unref(&h->DPB[1].pkt);
+                 FFSWAP(AVSFrame, h->cur, h->DPB[1]);
+                 FFSWAP(AVSFrame, h->DPB[0], h->DPB[1]);  
+             }  
+@@ -353,6 +429,7 @@ static int cavs_decode_seq_header(AVSContext *h)
+     h->aspect_ratio = si.aspect_ratio;
+     frame_rate_code = si.frame_rate_code;
+     h->low_delay = si.low_delay;
++    h->avctx->has_b_frames = FFMAX(h->avctx->has_b_frames, !h->low_delay);
+     h->mb_width  = (h->width  + 15) >> 4;
+     h->mb_height = (h->height + 15) >> 4;
+     h->avctx->time_base.den = ff_mpeg12_frame_rate_tab[frame_rate_code].num;
+@@ -382,11 +459,16 @@ static void cavs_flush(AVCodecContext * avctx)
+     h->b_delay_frame = 0;
+     h->last_frame_error = 0;
+     h->current_packet_pos = -1;
++    h->last_output_pts = AV_NOPTS_VALUE;
+     h->param.output_type = -1;
+ 
+     av_frame_unref(h->cur.f);
+     av_frame_unref(h->DPB[0].f);
+     av_frame_unref(h->DPB[1].f);
++    av_packet_unref(&h->current_packet);
++    av_packet_unref(&h->cur.pkt);
++    av_packet_unref(&h->DPB[0].pkt);
++    av_packet_unref(&h->DPB[1].pkt);
+ 
+     if (h->p_decoder && h->param.seq_header_flag)
+         cavs_decoder_seq_header_reset_pipeline(h->p_decoder);
+@@ -426,6 +508,16 @@ static int cavs_decode_frame(AVCodecContext *avctx, AVFrame *frame, int *got_fra
+     int i_first_adr = 0;
+     h->current_packet_pos = avpkt->pos;
+ 
++    if (buf_size != 0) {
++        if (avpkt->pos >= 0 && h->current_packet.pos >= 0 &&
++            avpkt->pos < h->current_packet.pos)
++            h->last_output_pts = AV_NOPTS_VALUE;
++
++        av_packet_unref(&h->current_packet);
++        if ((ret = av_packet_ref(&h->current_packet, avpkt)) < 0)
++            return ret;
++    }
++
+     /* probe frame or field decoded format */
+     if( !h->b_probe_flag && buf_size != 0 ) /* first probe flag, when finish set it to 1 */
+     {
+@@ -545,28 +637,48 @@ static int cavs_decode_frame(AVCodecContext *avctx, AVFrame *frame, int *got_fra
+             /* when last frame is IDR */
+             if(!h->b_last_delay_frame)
+             {
+-    	         h->b_last_delay_frame = 1;
+-    	         ret = cavs_decode_one_frame_delay( h->p_decoder, &h->param );
++		         h->b_last_delay_frame = 1;
++		         ret = cavs_decode_one_frame_delay( h->p_decoder, &h->param );
+                 
+                 h->output_type = h->param.output_type;
++                switch( h->output_type )
++                {
++                    case 0:
++                        h->output_type = AV_PICTURE_TYPE_I;
++                        break;
++                    case 1:
++                        h->output_type = AV_PICTURE_TYPE_P;
++                        break;
++                    case 2:
++                        h->output_type = AV_PICTURE_TYPE_B;
++                        break;
++                    default:
++                        ;
++                }
+ 
+-    	        if( ret == CAVS_FRAME_OUT )
++		        if( ret == CAVS_FRAME_OUT )
+                 {
+ 
+           
+                     av_frame_unref(h->cur.f);
++                    av_packet_unref(&h->cur.pkt);
+                     if ((ret = ff_get_buffer(h->avctx, h->cur.f,
+                                  h->output_type == AV_PICTURE_TYPE_B ?
+                                  0 : AV_GET_BUFFER_FLAG_REF)) < 0)
+                     return ret;
+ 
+                     decoder_get_cur_frame( h->cur.f, &h->param );
+-                    h->cur.f->pkt_pos = h->current_packet_pos;
++                    h->cur.f->pict_type = h->output_type;
++                    if ((ret = cavs_set_frame_packet(&h->cur, &h->current_packet)) < 0)
++                        return ret;
+                     *got_frame = 1;
+                     av_frame_move_ref(frame, h->cur.f);
+-                     
+-					frame->flags = h->b_interlaced ? AV_FRAME_FLAG_INTERLACED : 0;
+-	
++
++                    if ((ret = cavs_finalize_output_frame(h, frame, &h->cur)) < 0) {
++                        av_frame_unref(frame);
++                        return ret;
++                    }
++		
+                     return 0;
+                }
+             }        
+@@ -577,10 +689,13 @@ static int cavs_decode_frame(AVCodecContext *avctx, AVFrame *frame, int *got_fra
+             {
+                 
+                 decoder_get_cur_frame( h->DPB[0].f, &h->param );
+-                h->DPB[0].f->pkt_pos = h->current_packet_pos;
+                 *got_frame = 1;
+                 av_frame_move_ref(frame, h->DPB[0].f);
+-				frame->flags = h->b_interlaced ? AV_FRAME_FLAG_INTERLACED : 0;
++
++                if ((ret = cavs_finalize_output_frame(h, frame, &h->DPB[0])) < 0) {
++                    av_frame_unref(frame);
++                    return ret;
++                }
+             }
+         }
+ 
+@@ -663,6 +778,8 @@ static int cavs_decode_frame(AVCodecContext *avctx, AVFrame *frame, int *got_fra
+             if (!h->got_keyframe) {
+                 av_frame_unref(h->DPB[0].f);
+                 av_frame_unref(h->DPB[1].f);
++                av_packet_unref(&h->DPB[0].pkt);
++                av_packet_unref(&h->DPB[1].pkt);
+                 h->got_keyframe = 1;
+             }
+             i_pass_idr = 1; 
+@@ -717,7 +834,11 @@ static int cavs_decode_frame(AVCodecContext *avctx, AVFrame *frame, int *got_fra
+                         {
+                             return ret;
+                         }
+-						frame->flags = h->b_interlaced ? AV_FRAME_FLAG_INTERLACED : 0;
++
++                        if ((ret = cavs_finalize_output_frame(h, frame, &h->DPB[0])) < 0) {
++                            av_frame_unref(frame);
++                            return ret;
++                        }
+                     }
+                     else
+                     {
+@@ -731,7 +852,11 @@ static int cavs_decode_frame(AVCodecContext *avctx, AVFrame *frame, int *got_fra
+                     if(h->output_type == AV_PICTURE_TYPE_B && *got_frame == 1)
+                     {   
+                         av_frame_move_ref(frame, h->cur.f);
+-						frame->flags = h->b_interlaced ? AV_FRAME_FLAG_INTERLACED : 0;
++
++                        if ((ret = cavs_finalize_output_frame(h, frame, &h->cur)) < 0) {
++                            av_frame_unref(frame);
++                            return ret;
++                        }
+                     } 
+                 }
+             }
+@@ -745,7 +870,11 @@ static int cavs_decode_frame(AVCodecContext *avctx, AVFrame *frame, int *got_fra
+                         {
+                             return ret;
+                         }
+-						frame->flags = h->b_interlaced ? AV_FRAME_FLAG_INTERLACED : 0;
++
++                        if ((ret = cavs_finalize_output_frame(h, frame, &h->DPB[0])) < 0) {
++                            av_frame_unref(frame);
++                            return ret;
++                        }
+                     }
+                     else
+                     {
+@@ -755,11 +884,16 @@ static int cavs_decode_frame(AVCodecContext *avctx, AVFrame *frame, int *got_fra
+                             
+                             /* set h->cur.f */
+                             decoder_get_cur_frame( h->cur.f, &h->param );
+-                            h->cur.f->pkt_pos = h->current_packet_pos;
++                            if ((ret = cavs_set_frame_packet(&h->cur, &h->current_packet)) < 0)
++                                return ret;
+ 
+                             *got_frame = 1;
+                             av_frame_move_ref(frame, h->cur.f);
+-							frame->flags = h->b_interlaced ? AV_FRAME_FLAG_INTERLACED : 0;
++
++                            if ((ret = cavs_finalize_output_frame(h, frame, &h->cur)) < 0) {
++                                av_frame_unref(frame);
++                                return ret;
++                            }
+                         }
+                         else
+                         {
+@@ -772,7 +906,11 @@ static int cavs_decode_frame(AVCodecContext *avctx, AVFrame *frame, int *got_fra
+                     if(*got_frame == 1)
+                     {   
+                         av_frame_move_ref(frame, h->cur.f);
+-						frame->flags = h->b_interlaced ? AV_FRAME_FLAG_INTERLACED : 0;
++
++                        if ((ret = cavs_finalize_output_frame(h, frame, &h->cur)) < 0) {
++                            av_frame_unref(frame);
++                            return ret;
++                        }
+                     }
+                 }
+             }
+@@ -816,7 +954,8 @@ const FFCodec ff_cavs_decoder = {
+     .close          = ff_libcavs_end,
+     FF_CODEC_DECODE_CB(cavs_decode_frame),
+     .p.capabilities   = AV_CODEC_CAP_DELAY | AV_CODEC_CAP_OTHER_THREADS,
+-    .caps_internal  = FF_CODEC_CAP_AUTO_THREADS,
++    .caps_internal  = FF_CODEC_CAP_AUTO_THREADS | FF_CODEC_CAP_SETS_FRAME_PROPS |
++                      FF_CODEC_CAP_SETS_PKT_DTS,
+     .p.pix_fmts     = (const enum AVPixelFormat[]) { AV_PIX_FMT_YUV420P,
+                                                      AV_PIX_FMT_NONE },
+     .flush          = cavs_flush,

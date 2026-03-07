@@ -1,0 +1,493 @@
+diff --git a/libavcodec/cavs_parser.c b/libavcodec/cavs_parser.c
+index b26a6be..6e615c7 100644
+--- a/libavcodec/cavs_parser.c
++++ b/libavcodec/cavs_parser.c
+@@ -25,11 +25,33 @@
+  * @author Stefan Gehrer <stefan.gehrer@gmx.de>
+  */
+ 
++#include <stdint.h>
++
+ #include "parser.h"
+ #include "cavs.h"
+ 
++typedef struct CAVSParseContext {
++    ParseContext pc;
++    int64_t last_seq_start;
++    int64_t last_pic_start;
++    int64_t frame_start_pos;
++    int64_t picture_start_pos;
++} CAVSParseContext;
+ 
+-static void cavs_parser_parse_picture(AVCodecParserContext *s, const uint8_t *buf, int buf_size)
++static av_cold int cavsvideo_parser_init(AVCodecParserContext *s)
++{
++    CAVSParseContext *ctx = s->priv_data;
++
++    ctx->last_seq_start = -1;
++    ctx->last_pic_start = -1;
++    ctx->frame_start_pos = -1;
++    ctx->picture_start_pos = -1;
++
++    return 0;
++}
++
++static void cavs_parser_parse_picture(AVCodecParserContext *s, CAVSParseContext *ctx,
++                                      const uint8_t *buf, int buf_size)
+ {
+     uint32_t state = -1;
+ 
+@@ -41,59 +63,75 @@ static void cavs_parser_parse_picture(AVCodecParserContext *s, const uint8_t *bu
+         if (state == PIC_I_START_CODE) {
+             s->pict_type = AV_PICTURE_TYPE_I;
+             s->key_frame = 1;
++            if (ctx->frame_start_pos >= 0)
++                s->pos = ctx->frame_start_pos;
+             return;
+         }
+         if (state == PIC_PB_START_CODE) {
+             s->pict_type = AV_PICTURE_TYPE_P;
+             s->key_frame = 0;
++            if (ctx->picture_start_pos >= 0)
++                s->pos = ctx->picture_start_pos;
+             return;
+         }
+     }
+ }
+ 
+-
+-/**
+- * Find the end of the current frame in the bitstream.
+- * @return the position of the first byte of the next frame, or -1
+- */
+-static int cavs_find_frame_end(ParseContext *pc, const uint8_t *buf,
+-                               int buf_size, AVCodecParserContext *s) {
++static int cavs_find_frame_end(CAVSParseContext *ctx, const uint8_t *buf,
++                               int buf_size, AVCodecParserContext *s)
++{
++    ParseContext *pc = &ctx->pc;
+     int pic_found, i;
+     uint32_t state;
+ 
+-    pic_found= pc->frame_start_found;
+-    state= pc->state;
++    pic_found = pc->frame_start_found;
++    state = pc->state;
++
++    i = 0;
++    if (!pic_found) {
++        for (i = 0; i < buf_size; i++) {
++            int64_t start_pos;
++
++            state = (state << 8) | buf[i];
++            start_pos = s->cur_offset + i - 3;
++
++            if (state == CAVS_START_CODE)
++                ctx->last_seq_start = start_pos;
++
++            if (state == PIC_I_START_CODE || state == PIC_PB_START_CODE) {
++                ctx->picture_start_pos = start_pos;
++                ctx->frame_start_pos = start_pos;
++                if (state == PIC_I_START_CODE &&
++                    ctx->last_seq_start >= 0 &&
++                    ctx->last_seq_start > ctx->last_pic_start)
++                    ctx->frame_start_pos = ctx->last_seq_start;
++                ctx->last_pic_start = start_pos;
+ 
+-    i=0;
+-    if(!pic_found){
+-        for(i=0; i<buf_size; i++){
+-            state= (state<<8) | buf[i];
+-            if(state == PIC_I_START_CODE || state == PIC_PB_START_CODE){
+-                if (s)
+-                    ff_fetch_timestamp(s, i - 3, 1, i > 3);
++                ff_fetch_timestamp(s, i - 3, 1, i > 3);
++                s->pos = state == PIC_I_START_CODE ?
++                         ctx->frame_start_pos : ctx->picture_start_pos;
+                 i++;
+-                pic_found=1;
++                pic_found = 1;
+                 break;
+             }
+         }
+     }
+ 
+-    if(pic_found){
+-        /* EOF considered as end of frame */
++    if (pic_found) {
+         if (buf_size == 0)
+             return 0;
+-        for(; i<buf_size; i++){
+-            state= (state<<8) | buf[i];
++        for (; i < buf_size; i++) {
++            state = (state << 8) | buf[i];
+             if (state == PIC_I_START_CODE || state == PIC_PB_START_CODE ||
+-                    state == CAVS_START_CODE) {
+-                pc->frame_start_found=0;
+-                pc->state=-1;
+-                return i-3;
++                state == CAVS_START_CODE) {
++                pc->frame_start_found = 0;
++                pc->state = -1;
++                return i - 3;
+             }
+         }
+     }
+-    pc->frame_start_found= pic_found;
+-    pc->state= state;
++    pc->frame_start_found = pic_found;
++    pc->state = state;
+     return END_NOT_FOUND;
+ }
+ 
+@@ -102,13 +140,14 @@ static int cavsvideo_parse(AVCodecParserContext *s,
+                            const uint8_t **poutbuf, int *poutbuf_size,
+                            const uint8_t *buf, int buf_size)
+ {
+-    ParseContext *pc = s->priv_data;
++    CAVSParseContext *ctx = s->priv_data;
++    ParseContext *pc = &ctx->pc;
+     int next;
+ 
+-    if(s->flags & PARSER_FLAG_COMPLETE_FRAMES){
+-        next= buf_size;
+-    }else{
+-        next= cavs_find_frame_end(pc, buf, buf_size, s);
++    if (s->flags & PARSER_FLAG_COMPLETE_FRAMES) {
++        next = buf_size;
++    } else {
++        next = cavs_find_frame_end(ctx, buf, buf_size, s);
+ 
+         if (ff_combine_frame(pc, next, &buf, &buf_size) < 0) {
+             *poutbuf = NULL;
+@@ -120,14 +159,15 @@ static int cavsvideo_parse(AVCodecParserContext *s,
+     *poutbuf_size = buf_size;
+ 
+     if (buf_size > 0)
+-        cavs_parser_parse_picture(s, buf, buf_size);
++        cavs_parser_parse_picture(s, ctx, buf, buf_size);
+ 
+     return next;
+ }
+ 
+ const AVCodecParser ff_cavsvideo_parser = {
+     .codec_ids      = { AV_CODEC_ID_CAVS },
+-    .priv_data_size = sizeof(ParseContext),
++    .priv_data_size = sizeof(CAVSParseContext),
++    .parser_init    = cavsvideo_parser_init,
+     .parser_parse   = cavsvideo_parse,
+     .parser_close   = ff_parse_close,
+ };
+diff --git a/libavformat/cavsvideodec.c b/libavformat/cavsvideodec.c
+index b89851f..1dd8013 100644
+--- a/libavformat/cavsvideodec.c
++++ b/libavformat/cavsvideodec.c
+@@ -20,7 +20,9 @@
+  */
+ 
+ #include "libavcodec/startcode.h"
++#include "libavutil/mem.h"
+ #include "avformat.h"
++#include "internal.h"
+ #include "rawdec.h"
+ 
+ #define CAVS_SEQ_START_CODE       0x000001b0
+@@ -28,21 +30,32 @@
+ #define CAVS_UNDEF_START_CODE     0x000001b4
+ #define CAVS_PIC_PB_START_CODE    0x000001b6
+ #define CAVS_VIDEO_EDIT_CODE      0x000001b7
+-#define CAVS_PROFILE_JIZHUN       0x20       // AVS1 P2
+-#define CAVS_PROFILE_GUANGDIAN    0x48       // AVS1 P16/AVS+
++#define CAVS_PROFILE_JIZHUN       0x20
++#define CAVS_PROFILE_GUANGDIAN    0x48
++#define CAVS_SCAN_CHUNK           (128 * 1024)
++#define CAVS_SEQ_SEARCH_WINDOW    (8 * 1024 * 1024)
++
++typedef struct CAVSVideoDemuxerContext {
++    const AVClass *class;
++    int raw_packet_size;
++    char *video_size;
++    char *pixel_format;
++    AVRational framerate;
++    int64_t last_seek_pos;
++    int64_t last_seek_ts;
++} CAVSVideoDemuxerContext;
+ 
+ static int cavsvideo_probe(const AVProbeData *p)
+ {
+-    uint32_t code= -1;
+-    int pic=0, seq=0, slice_pos = 0;
++    uint32_t code = -1;
++    int pic = 0, seq = 0, slice_pos = 0;
+     const uint8_t *ptr = p->buf, *end = p->buf + p->buf_size;
+ 
+     while (ptr < end) {
+         ptr = avpriv_find_start_code(ptr, end, &code);
+         if ((code & 0xffffff00) == 0x100) {
+-            if(code < CAVS_SEQ_START_CODE) {
+-                /* slices have to be consecutive */
+-                if(code < slice_pos)
++            if (code < CAVS_SEQ_START_CODE) {
++                if (code < slice_pos)
+                     return 0;
+                 slice_pos = code;
+             } else {
+@@ -50,21 +63,209 @@ static int cavsvideo_probe(const AVProbeData *p)
+             }
+             if (code == CAVS_SEQ_START_CODE) {
+                 seq++;
+-                /* check for the only currently supported profile */
+                 if (*ptr != CAVS_PROFILE_JIZHUN && *ptr != CAVS_PROFILE_GUANGDIAN)
+                     return 0;
+-            } else if ((code == CAVS_PIC_I_START_CODE) ||
+-                       (code == CAVS_PIC_PB_START_CODE)) {
++            } else if (code == CAVS_PIC_I_START_CODE || code == CAVS_PIC_PB_START_CODE) {
+                 pic++;
+-            } else if ((code == CAVS_UNDEF_START_CODE) ||
+-                       (code >  CAVS_VIDEO_EDIT_CODE)) {
++            } else if (code == CAVS_UNDEF_START_CODE || code > CAVS_VIDEO_EDIT_CODE) {
+                 return 0;
+             }
+         }
+     }
+-    if(seq && seq*9<=pic*10)
+-        return AVPROBE_SCORE_EXTENSION+1;
++    if (seq && seq * 9 <= pic * 10)
++        return AVPROBE_SCORE_EXTENSION + 1;
++    return 0;
++}
++
++static int64_t cavsvideo_find_prev_code(AVIOContext *pb, int64_t anchor_pos, uint8_t wanted)
++{
++    uint8_t *buffer;
++    int64_t search_end;
++    int64_t found = -1;
++
++    buffer = av_malloc(CAVS_SCAN_CHUNK + 3);
++    if (!buffer)
++        return AVERROR(ENOMEM);
++
++    search_end = anchor_pos > 0 ? anchor_pos - 1 : 0;
++    while (search_end >= 0) {
++        int64_t chunk_start = search_end > CAVS_SCAN_CHUNK ?
++                              search_end - CAVS_SCAN_CHUNK : 0;
++        int read_size = (int)(search_end - chunk_start + 1);
++        int ret;
++
++        if (avio_seek(pb, chunk_start, SEEK_SET) < 0)
++            break;
++        ret = avio_read(pb, buffer, read_size);
++        if (ret <= 0)
++            break;
++
++        for (int i = ret - 4; i >= 0; i--) {
++            if (buffer[i] == 0x00 && buffer[i + 1] == 0x00 &&
++                buffer[i + 2] == 0x01 && buffer[i + 3] == wanted) {
++                found = chunk_start + i;
++                goto end;
++            }
++        }
++
++        if (chunk_start == 0)
++            break;
++        search_end = chunk_start + 2;
++    }
++
++end:
++    av_free(buffer);
++    return found;
++}
++
++static int64_t cavsvideo_find_cut_pos(AVIOContext *pb, int64_t key_pos)
++{
++    uint8_t header[4];
++    int64_t search_start = key_pos > CAVS_SEQ_SEARCH_WINDOW ?
++                           key_pos - CAVS_SEQ_SEARCH_WINDOW : 0;
++    int64_t cut_pos = key_pos;
++    int64_t restore_pos;
++    int64_t seq_pos;
++    int ret;
++
++    if (key_pos <= 0)
++        return key_pos;
++
++    restore_pos = avio_tell(pb);
++    if (avio_seek(pb, key_pos, SEEK_SET) >= 0) {
++        ret = avio_read(pb, header, sizeof(header));
++        if (ret == sizeof(header) &&
++            header[0] == 0x00 && header[1] == 0x00 && header[2] == 0x01) {
++            if (header[3] == 0xB0) {
++                if (restore_pos >= 0)
++                    avio_seek(pb, restore_pos, SEEK_SET);
++                return key_pos;
++            }
++        }
++    }
++    if (restore_pos >= 0)
++        avio_seek(pb, restore_pos, SEEK_SET);
++
++    seq_pos = cavsvideo_find_prev_code(pb, key_pos, 0xB0);
++    if (seq_pos >= search_start)
++        cut_pos = seq_pos;
++
++    return cut_pos;
++}
++
++static int cavsvideo_read_header(AVFormatContext *s)
++{
++    CAVSVideoDemuxerContext *cavs = s->priv_data;
++    int ret = ff_raw_video_read_header(s);
++
++    if (ret < 0)
++        return ret;
++
++    cavs->last_seek_pos = -1;
++    cavs->last_seek_ts  = AV_NOPTS_VALUE;
++    return 0;
++}
++
++static const AVIndexEntry *cavsvideo_select_entry(AVFormatContext *s, AVStream *st,
++                                                  int64_t timestamp, int flags)
++{
++    CAVSVideoDemuxerContext *cavs = s->priv_data;
++    const FFStream *sti = ffstream(st);
++    int index = av_index_search_timestamp(st, timestamp, flags);
++    int64_t cur_dts = sti->cur_dts;
++
++    if (index < 0)
++        return NULL;
++
++    if (flags & AVSEEK_FLAG_BACKWARD) {
++        const AVIndexEntry *entry = avformat_index_get_entry(st, index);
++
++        while (entry) {
++            if (entry->timestamp >= timestamp) {
++                index--;
++            } else if (cavs->last_seek_ts != AV_NOPTS_VALUE &&
++                       entry->timestamp >= cavs->last_seek_ts) {
++                index--;
++            } else if (cavs->last_seek_pos >= 0 && entry->pos >= cavs->last_seek_pos) {
++                index--;
++            } else if (cur_dts != AV_NOPTS_VALUE && entry->timestamp >= cur_dts) {
++                index--;
++            } else {
++                break;
++            }
++            entry = avformat_index_get_entry(st, index);
++        }
++
++        return entry;
++    }
++
++    return avformat_index_get_entry(st, index);
++}
++
++static int cavsvideo_read_seek(AVFormatContext *s, int stream_index,
++                               int64_t timestamp, int flags)
++{
++    CAVSVideoDemuxerContext *cavs = s->priv_data;
++    AVStream *st = s->streams[stream_index];
++    const AVIndexEntry *entry;
++    int64_t pos;
++
++    if (!(s->pb->seekable & AVIO_SEEKABLE_NORMAL))
++        return AVERROR(ENOSYS);
++
++    entry = cavsvideo_select_entry(s, st, timestamp, flags);
++    if (entry) {
++        pos = cavsvideo_find_cut_pos(s->pb, entry->pos);
++        if (avio_seek(s->pb, pos, SEEK_SET) < 0)
++            return AVERROR(EIO);
++        cavs->last_seek_pos = entry->pos;
++        cavs->last_seek_ts  = entry->timestamp;
++        s->io_repositioned = 1;
++        avpriv_update_cur_dts(s, st, entry->timestamp);
++        return 0;
++    }
++
++    if (!(flags & AVSEEK_FLAG_BACKWARD))
++        return -1;
++
++    entry = avformat_index_get_entry_from_timestamp(st, timestamp, 0);
++    if (entry)
++        pos = cavsvideo_find_cut_pos(s->pb, entry->pos);
++    else if (cavs->last_seek_pos >= 0)
++        pos = cavs->last_seek_pos;
++    else
++        pos = avio_tell(s->pb);
++
++    if (pos <= 0) {
++        pos = avio_size(s->pb);
++        if (pos <= 0)
++            return -1;
++    }
++
++    pos = cavsvideo_find_prev_code(s->pb, pos, 0xB3);
++    if (pos < 0)
++        return -1;
++
++    cavs->last_seek_pos = pos;
++    pos = cavsvideo_find_cut_pos(s->pb, pos);
++    if (avio_seek(s->pb, pos, SEEK_SET) < 0)
++        return AVERROR(EIO);
++
++    s->io_repositioned = 1;
++    avpriv_update_cur_dts(s, st, timestamp);
+     return 0;
+ }
+ 
+-FF_DEF_RAWVIDEO_DEMUXER(cavsvideo, "raw Chinese AVS (Audio Video Standard)", cavsvideo_probe, "avs", AV_CODEC_ID_CAVS)
++const FFInputFormat ff_cavsvideo_demuxer = {
++    .p.name         = "cavsvideo",
++    .p.long_name    = NULL_IF_CONFIG_SMALL("raw Chinese AVS (Audio Video Standard)"),
++    .p.extensions   = "avs",
++    .p.flags        = AVFMT_GENERIC_INDEX | AVFMT_NOTIMESTAMPS,
++    .p.priv_class   = &ff_rawvideo_demuxer_class,
++    .read_probe     = cavsvideo_probe,
++    .read_header    = cavsvideo_read_header,
++    .read_packet    = ff_raw_read_partial_packet,
++    .read_seek      = cavsvideo_read_seek,
++    .raw_codec_id   = AV_CODEC_ID_CAVS,
++    .priv_data_size = sizeof(CAVSVideoDemuxerContext),
++};
+diff --git a/libavformat/demux.c b/libavformat/demux.c
+index 2796209..9131084 100644
+--- a/libavformat/demux.c
++++ b/libavformat/demux.c
+@@ -1249,7 +1249,9 @@ static int parse_packet(AVFormatContext *s, AVPacket *pkt,
+         out_pkt->flags       |= pkt->flags & (AV_PKT_FLAG_DISCARD | AV_PKT_FLAG_CORRUPT);
+ 
+         if (sti->need_parsing == AVSTREAM_PARSE_FULL_RAW)
+-            out_pkt->pos = sti->parser->frame_offset;
++            out_pkt->pos = st->codecpar->codec_id == AV_CODEC_ID_CAVS &&
++                           sti->parser->pos >= 0 ?
++                           sti->parser->pos : sti->parser->frame_offset;
+ 
+         if (sti->parser->key_frame == 1 ||
+             (sti->parser->key_frame == -1 &&
+@@ -1453,8 +1455,11 @@ static int read_frame_internal(AVFormatContext *s, AVPacket *pkt)
+             compute_pkt_fields(s, st, NULL, pkt, AV_NOPTS_VALUE, AV_NOPTS_VALUE);
+             if ((s->iformat->flags & AVFMT_GENERIC_INDEX) &&
+                 (pkt->flags & AV_PKT_FLAG_KEY) && pkt->dts != AV_NOPTS_VALUE) {
++                int64_t index_ts = pkt->dts;
++                if (st->codecpar->codec_id == AV_CODEC_ID_CAVS && pkt->pts != AV_NOPTS_VALUE)
++                    index_ts = pkt->pts;
+                 ff_reduce_index(s, st->index);
+-                av_add_index_entry(st, pkt->pos, pkt->dts,
++                av_add_index_entry(st, pkt->pos, index_ts,
+                                    0, 0, AVINDEX_KEYFRAME);
+             }
+             got_packet = 1;
+@@ -1642,8 +1647,11 @@ int av_read_frame(AVFormatContext *s, AVPacket *pkt)
+ return_packet:
+     st = s->streams[pkt->stream_index];
+     if ((s->iformat->flags & AVFMT_GENERIC_INDEX) && pkt->flags & AV_PKT_FLAG_KEY) {
++        int64_t index_ts = pkt->dts;
++        if (st->codecpar->codec_id == AV_CODEC_ID_CAVS && pkt->pts != AV_NOPTS_VALUE)
++            index_ts = pkt->pts;
+         ff_reduce_index(s, st->index);
+-        av_add_index_entry(st, pkt->pos, pkt->dts, 0, 0, AVINDEX_KEYFRAME);
++        av_add_index_entry(st, pkt->pos, index_ts, 0, 0, AVINDEX_KEYFRAME);
+     }
+ 
+     if (is_relative(pkt->dts))
