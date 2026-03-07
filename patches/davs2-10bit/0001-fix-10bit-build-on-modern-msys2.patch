@@ -1,0 +1,40 @@
+diff --git a/build/linux/configure b/build/linux/configure
+index d895300..f65ae1f 100755
+--- a/build/linux/configure
++++ b/build/linux/configure
+@@ -466,9 +466,6 @@ for opt do
+             if [ "$bit_depth" -lt "8" -o "$bit_depth" -gt "10" ]; then
+                 echo "Supplied bit depth must be in range [8,10]."
+                 exit 1
+-            elif [[ "$bit_depth" = "9" || "$bit_depth" = "10" ]]; then
+-                echo "BitDepth $bit_depth not supported currently."
+-                exit 1
+             fi
+             bit_depth=`expr $bit_depth + 0`
+             ;;
+diff --git a/source/common/vec/intrinsic_intra-pred.cc b/source/common/vec/intrinsic_intra-pred.cc
+index 5c8b39a..8b9c7c7 100644
+--- a/source/common/vec/intrinsic_intra-pred.cc
++++ b/source/common/vec/intrinsic_intra-pred.cc
+@@ -8549,7 +8549,7 @@ void intra_pred_bilinear_sse128_10bit(pel_t* pSrc, pel_t* dst, int i_dst, int d
+     int x, y;
+     int ishift_x = tab_log2[iWidth];
+     int ishift_y = tab_log2[iHeight];
+-    int ishift = min(ishift_x, ishift_y);
++    int ishift = (ishift_x < ishift_y) ? ishift_x : ishift_y;
+     int ishift_xy = ishift_x + ishift_y + 1;
+     int offset = 1 << (ishift_x + ishift_y);
+     int a, b, c, w, val;
+diff --git a/source/common/alf.cc b/source/common/alf.cc
+index d6c6521..f4bc2ce 100644
+--- a/source/common/alf.cc
++++ b/source/common/alf.cc
+@@ -518,7 +518,7 @@ void davs2_alf_init(uint32_t cpuid, ao_funcs_t *fh)
+         if (cpuid & DAVS2_CPU_SSE4) {
+             fh->alf_block[0] = alf_filter_block_sse128_10bit;
+         }
+-        if (cpuid & (DAVS2_CPU_AVX2)) {
++        if (0 && (cpuid & (DAVS2_CPU_AVX2))) {
+             fh->alf_block[0] = alf_filter_block_avx2_10bit;
+         }
+ #else
