@@ -1,0 +1,69 @@
+diff --git a/libavcodec/cavs_parser.c b/libavcodec/cavs_parser.c
+--- a/libavcodec/cavs_parser.c
++++ b/libavcodec/cavs_parser.c
+@@ -29,12 +29,35 @@
+ #include "cavs.h"
+ 
+ 
++static void cavs_parser_parse_picture(AVCodecParserContext *s, const uint8_t *buf, int buf_size)
++{
++    uint32_t state = -1;
++
++    s->pict_type = AV_PICTURE_TYPE_NONE;
++    s->key_frame = -1;
++
++    for (int i = 0; i < buf_size; i++) {
++        state = (state << 8) | buf[i];
++        if (state == PIC_I_START_CODE) {
++            s->pict_type = AV_PICTURE_TYPE_I;
++            s->key_frame = 1;
++            return;
++        }
++        if (state == PIC_PB_START_CODE) {
++            s->pict_type = AV_PICTURE_TYPE_P;
++            s->key_frame = 0;
++            return;
++        }
++    }
++}
++
++
+ /**
+  * Find the end of the current frame in the bitstream.
+  * @return the position of the first byte of the next frame, or -1
+  */
+ static int cavs_find_frame_end(ParseContext *pc, const uint8_t *buf,
+-                               int buf_size) {
++                               int buf_size, AVCodecParserContext *s) {
+     int pic_found, i;
+     uint32_t state;
+ 
+@@ -46,6 +69,8 @@ static int cavs_find_frame_end(ParseContext *pc, const uint8_t *buf,
+         for(i=0; i<buf_size; i++){
+             state= (state<<8) | buf[i];
+             if(state == PIC_I_START_CODE || state == PIC_PB_START_CODE){
++                if (s)
++                    ff_fetch_timestamp(s, i - 3, 1, i > 3);
+                 i++;
+                 pic_found=1;
+                 break;
+@@ -83,7 +108,7 @@ static int cavsvideo_parse(AVCodecParserContext *s,
+     if(s->flags & PARSER_FLAG_COMPLETE_FRAMES){
+         next= buf_size;
+     }else{
+-        next= cavs_find_frame_end(pc, buf, buf_size);
++        next= cavs_find_frame_end(pc, buf, buf_size, s);
+ 
+         if (ff_combine_frame(pc, next, &buf, &buf_size) < 0) {
+             *poutbuf = NULL;
+@@ -93,6 +118,10 @@ static int cavsvideo_parse(AVCodecParserContext *s,
+     }
+     *poutbuf = buf;
+     *poutbuf_size = buf_size;
++
++    if (buf_size > 0)
++        cavs_parser_parse_picture(s, buf, buf_size);
++
+     return next;
+ }
+ 
