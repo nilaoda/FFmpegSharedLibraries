@@ -39,6 +39,12 @@ DAVS2_BUILD_DIR="$DAVS2_SOURCE_DIR/build"
 DAVS2_INSTALL_ROOT="$WORK_ROOT/davs2-install"
 DAVS2_PATCH_PATH="$REPO_ROOT/patches/davs2-10bit/0001-enable-10bit-build-and-propagate-frame-packet-position.patch"
 FFMPEG_DAVS2_PATCH_PATH="$REPO_ROOT/patches/ffmpeg/0001-libdavs2-export-pkt_pos-from-decoder-output.patch"
+DEFAULT_CAVS_DRA_PATCH_PATH="/Users/macmini/code/GitHub/ffmpeg_cavs_dra/ffmpeg-7.1.2_cavs_dra.patch"
+CAVS_DRA_GIT_URL="https://github.com/maliwen2015/ffmpeg_cavs_dra.git"
+CAVS_DRA_GIT_REF="${CAVS_DRA_GIT_REF:-abae276fed97ce08928f25c8f5e03fd915687f54}"
+CAVS_DRA_SOURCE_DIR="$SOURCE_ROOT/ffmpeg_cavs_dra"
+CAVS_DRA_PATCH_CACHE_PATH="$CAVS_DRA_SOURCE_DIR/ffmpeg-7.1.2_cavs_dra.patch"
+FFMPEG_CAVS_DRA_PATCH_PATH="${FFMPEG_CAVS_DRA_PATCH_PATH:-}"
 INSTALL_ROOT="$WORK_ROOT/install"
 PACKAGE_ROOT="$WORK_ROOT/package"
 RUNTIME_ROOT="$PACKAGE_ROOT"
@@ -205,6 +211,35 @@ if [[ "$ENABLE_LIBDAVS2" == true ]]; then
   if ! patch -d "$SOURCE_DIR" -p1 --forward <"$FFMPEG_DAVS2_PATCH_PATH"; then
     patch -d "$SOURCE_DIR" -p1 --forward -l <"$FFMPEG_DAVS2_PATCH_PATH"
   fi
+fi
+
+if [[ -z "$FFMPEG_CAVS_DRA_PATCH_PATH" ]]; then
+  if [[ -f "$DEFAULT_CAVS_DRA_PATCH_PATH" ]]; then
+    FFMPEG_CAVS_DRA_PATCH_PATH="$DEFAULT_CAVS_DRA_PATCH_PATH"
+  else
+    rm -rf "$CAVS_DRA_SOURCE_DIR"
+    git init "$CAVS_DRA_SOURCE_DIR" >/dev/null
+    git -C "$CAVS_DRA_SOURCE_DIR" remote add origin "$CAVS_DRA_GIT_URL"
+    git -C "$CAVS_DRA_SOURCE_DIR" fetch --depth 1 origin "$CAVS_DRA_GIT_REF"
+    git -C "$CAVS_DRA_SOURCE_DIR" checkout --detach FETCH_HEAD
+    FFMPEG_CAVS_DRA_PATCH_PATH="$CAVS_DRA_PATCH_CACHE_PATH"
+  fi
+fi
+
+if [[ ! -f "$FFMPEG_CAVS_DRA_PATCH_PATH" ]]; then
+  echo "Missing FFmpeg cavs/dra patch file: $FFMPEG_CAVS_DRA_PATCH_PATH" >&2
+  exit 1
+fi
+
+if ! git -C "$SOURCE_DIR" apply -p2 --check "$FFMPEG_CAVS_DRA_PATCH_PATH" 2>/dev/null; then
+  if ! git -C "$SOURCE_DIR" apply -p2 --check --recount --ignore-space-change --ignore-whitespace "$FFMPEG_CAVS_DRA_PATCH_PATH" 2>/dev/null; then
+    echo "Failed to validate FFmpeg cavs/dra patch against ffmpeg-$FFMPEG_VERSION" >&2
+    exit 1
+  fi
+fi
+
+if ! git -C "$SOURCE_DIR" apply -p2 "$FFMPEG_CAVS_DRA_PATCH_PATH" 2>/dev/null; then
+  git -C "$SOURCE_DIR" apply -p2 --recount --ignore-space-change --ignore-whitespace "$FFMPEG_CAVS_DRA_PATCH_PATH"
 fi
 
 PKG_CONFIG_PATH_ENTRIES=("$UAVS3D_INSTALL_ROOT/lib/pkgconfig")

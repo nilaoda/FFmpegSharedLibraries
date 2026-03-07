@@ -28,6 +28,13 @@ All build workflows are fixed to:
 
 Manual runs use `workflow_dispatch` without custom input fields.
 
+## Third-Party Libraries
+
+- FFmpeg: https://ffmpeg.org/
+- uavs3d: https://github.com/uavs3/uavs3d
+- davs2-10bit: https://github.com/xatabhk/davs2-10bit
+- ffmpeg_cavs_dra patch source: https://github.com/maliwen2015/ffmpeg_cavs_dra
+
 ## Workflows
 
 - [`.github/workflows/build-ffmpeg-runtime-macos.yml`](./.github/workflows/build-ffmpeg-runtime-macos.yml)
