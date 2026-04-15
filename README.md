@@ -14,11 +14,14 @@ Each workflow builds FFmpeg shared libraries only.
 - `libdavs2` (`davs2-10bit`) is built from source and linked statically when `license_flavor=gpl`.
 - Runtime artifacts do not include separate `libuavs3d`/`libdavs2` dynamic libraries.
 
-The build applies a small set of local patches across both `davs2-10bit` and FFmpeg:
+The build downloads third-party sources into the workflow temp work root (`$RUNNER_TEMP/ffmpeg-runtime-build` in GitHub Actions) and applies a small set of local patches across both `davs2-10bit` and FFmpeg:
 
 - `patches/davs2-10bit/0001-enable-10bit-build-and-propagate-frame-packet-position.patch`
   - enables 10-bit `davs2-10bit` builds,
   - propagates decoder-side packet file position metadata through `libdavs2` output.
+- `patches/davs2-10bit/0002-x86-build-avx-codepaths-as-dispatch-only.patch`
+  - keeps generic `x86_64` objects on an SSE4.x baseline instead of compiling the whole library with `-mavx`,
+  - builds AVX and AVX2 translation units separately so runtime CPUID dispatch stays compatible with both older and newer x86 devices.
 - `patches/ffmpeg/0001-libdavs2-export-pkt_pos-from-decoder-output.patch`
   - maps `libdavs2` packet position metadata to FFmpeg frame `pkt_pos`.
 - `patches/ffmpeg/0002-libcavs-fix-macos-build-compat.patch`

@@ -38,6 +38,7 @@ DAVS2_SOURCE_DIR="$SOURCE_ROOT/davs2"
 DAVS2_BUILD_DIR="$DAVS2_SOURCE_DIR/build"
 DAVS2_INSTALL_ROOT="$WORK_ROOT/davs2-install"
 DAVS2_PATCH_PATH="$REPO_ROOT/patches/davs2-10bit/0001-enable-10bit-build-and-propagate-frame-packet-position.patch"
+DAVS2_COMPAT_PATCH_PATH="$REPO_ROOT/patches/davs2-10bit/0002-x86-build-avx-codepaths-as-dispatch-only.patch"
 FFMPEG_DAVS2_PATCH_PATH="$REPO_ROOT/patches/ffmpeg/0001-libdavs2-export-pkt_pos-from-decoder-output.patch"
 FFMPEG_CAVS_DRA_FIX_PATCH_PATH="$REPO_ROOT/patches/ffmpeg/0003-libcavs-export-pkt_pos-and-simplify-profile-name.patch"
 FFMPEG_CAVS_DRA_FRAME_PROPS_PATCH_PATH="$REPO_ROOT/patches/ffmpeg/0004-libcavs-fix-reordered-frame-props.patch"
@@ -145,18 +146,24 @@ if [[ "$LICENSE_FLAVOR" == "gpl" ]]; then
   git -C "$DAVS2_SOURCE_DIR" fetch --depth 1 origin "$DAVS2_GIT_REF"
   git -C "$DAVS2_SOURCE_DIR" checkout --detach FETCH_HEAD
 
-  if [[ ! -f "$DAVS2_PATCH_PATH" ]]; then
-    echo "Missing davs2 patch file: $DAVS2_PATCH_PATH" >&2
-    exit 1
-  fi
+  for davs2_patch_path in "$DAVS2_PATCH_PATH" "$DAVS2_COMPAT_PATCH_PATH"; do
+    if [[ ! -f "$davs2_patch_path" ]]; then
+      echo "Missing davs2 patch file: $davs2_patch_path" >&2
+      exit 1
+    fi
 
-  if ! git -C "$DAVS2_SOURCE_DIR" apply --check "$DAVS2_PATCH_PATH"; then
-    git -C "$DAVS2_SOURCE_DIR" apply --check --ignore-space-change --ignore-whitespace "$DAVS2_PATCH_PATH"
-  fi
+    if ! git -C "$DAVS2_SOURCE_DIR" apply --check "$davs2_patch_path" 2>/dev/null; then
+      if ! git -C "$DAVS2_SOURCE_DIR" apply --check --recount --ignore-space-change --ignore-whitespace "$davs2_patch_path" 2>/dev/null; then
+        patch -d "$DAVS2_SOURCE_DIR" -p1 --dry-run -l <"$davs2_patch_path" >/dev/null
+      fi
+    fi
 
-  if ! git -C "$DAVS2_SOURCE_DIR" apply "$DAVS2_PATCH_PATH"; then
-    git -C "$DAVS2_SOURCE_DIR" apply --ignore-space-change --ignore-whitespace "$DAVS2_PATCH_PATH"
-  fi
+    if ! git -C "$DAVS2_SOURCE_DIR" apply "$davs2_patch_path" 2>/dev/null; then
+      if ! git -C "$DAVS2_SOURCE_DIR" apply --recount --ignore-space-change --ignore-whitespace "$davs2_patch_path" 2>/dev/null; then
+        patch -d "$DAVS2_SOURCE_DIR" -p1 --forward -l <"$davs2_patch_path"
+      fi
+    fi
+  done
 
   DAVS2_CONFIGURE_DIR=""
   while IFS= read -r configure_path; do
