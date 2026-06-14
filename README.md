@@ -22,6 +22,9 @@ The build downloads third-party sources into the workflow temp work root (`$RUNN
 - `patches/davs2-10bit/0002-x86-build-avx-codepaths-as-dispatch-only.patch`
   - keeps generic `x86_64` objects on an SSE4.x baseline instead of compiling the whole library with `-mavx`,
   - builds AVX and AVX2 translation units separately so runtime CPUID dispatch stays compatible with both older and newer x86 devices.
+- `patches/davs2-10bit/0003-fix-dpb-stale-ref-frames.patch`
+  - fixes a hang in the DPB (decoded picture buffer) allocation loop that can occur with certain AVS2 streams,
+  - recycles stale reference frames that have `b_refered_by_others==1 && i_ref_count==0` (zombie frames never cleaned by the RPS) instead of blocking the pipeline forever.
 - `patches/ffmpeg/0001-libdavs2-export-pkt_pos-from-decoder-output.patch`
   - maps `libdavs2` packet position metadata to FFmpeg frame `pkt_pos`.
 - `patches/ffmpeg/0002-libcavs-fix-macos-build-compat.patch`
