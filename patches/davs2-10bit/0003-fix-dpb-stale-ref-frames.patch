@@ -1,0 +1,24 @@
+diff --git a/source/common/header.cc b/source/common/header.cc
+index b5dbdb5..4e0e06b 100644
+--- a/source/common/header.cc
++++ b/source/common/header.cc
+@@ -1364,7 +1364,18 @@ int task_get_references(davs2_t *h, int64_t pts, int64_t dts)
+ 
+                 davs2_thread_mutex_lock(&frame->mutex_frm);
+ 
+-                if (frame->i_ref_count == 0 && frame->b_refered_by_others == 0) {
++                if (frame->i_ref_count == 0) {
++                    /*
++                     * b_refered_by_others == 1 && i_ref_count == 0 means a stale
++                     * reference frame: no one holds a reference to it anymore, but
++                     * it was never cleaned because i_disposable was 0. Recycle it.
++                     */
++                    if (frame->b_refered_by_others != 0) {
++                        davs2_log(h, DAVS2_LOG_WARNING,
++                            "recycle stale reference frame <poc: %d, coi: %d>.",
++                            frame->i_poc, frame->i_coi);
++                        clean_one_frame(frame);
++                    }
+                     assert(frame->i_disposable == 0);
+ 
+                     frame->i_ref_count++;   /* for the decoding thread */

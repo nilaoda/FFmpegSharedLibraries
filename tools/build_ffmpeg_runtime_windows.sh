@@ -39,6 +39,7 @@ DAVS2_BUILD_DIR="$DAVS2_SOURCE_DIR/build"
 DAVS2_INSTALL_ROOT="$WORK_ROOT/davs2-install"
 DAVS2_PATCH_PATH="$REPO_ROOT/patches/davs2-10bit/0001-enable-10bit-build-and-propagate-frame-packet-position.patch"
 DAVS2_COMPAT_PATCH_PATH="$REPO_ROOT/patches/davs2-10bit/0002-x86-build-avx-codepaths-as-dispatch-only.patch"
+DAVS2_DPB_FIX_PATCH_PATH="$REPO_ROOT/patches/davs2-10bit/0003-fix-dpb-stale-ref-frames.patch"
 FFMPEG_DAVS2_PATCH_PATH="$REPO_ROOT/patches/ffmpeg/0001-libdavs2-export-pkt_pos-from-decoder-output.patch"
 FFMPEG_CAVS_DRA_FIX_PATCH_PATH="$REPO_ROOT/patches/ffmpeg/0003-libcavs-export-pkt_pos-and-simplify-profile-name.patch"
 FFMPEG_CAVS_DRA_FRAME_PROPS_PATCH_PATH="$REPO_ROOT/patches/ffmpeg/0004-libcavs-fix-reordered-frame-props.patch"
@@ -151,7 +152,7 @@ if [[ "$LICENSE_FLAVOR" == "gpl" ]]; then
   git -C "$DAVS2_SOURCE_DIR" config core.autocrlf false
   git -C "$DAVS2_SOURCE_DIR" checkout --detach FETCH_HEAD
 
-  for davs2_patch_path in "$DAVS2_PATCH_PATH" "$DAVS2_COMPAT_PATCH_PATH"; do
+  for davs2_patch_path in "$DAVS2_PATCH_PATH" "$DAVS2_COMPAT_PATCH_PATH" "$DAVS2_DPB_FIX_PATCH_PATH"; do
     if [[ ! -f "$davs2_patch_path" ]]; then
       echo "Missing davs2 patch file: $davs2_patch_path" >&2
       exit 1
