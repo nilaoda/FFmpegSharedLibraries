@@ -4,6 +4,7 @@ set -euo pipefail
 # Build a self-contained Windows x64 FFmpeg runtime:
 # - FFmpeg shared DLLs are packaged
 # - libuavs3d is built as a static dependency and linked into FFmpeg
+# - D3D11VA and DXVA2 hardware decoding are enabled through Windows system APIs
 # - unexpected non-system DLL dependencies are treated as build failures
 # - decoders stay broad by default, while most encoders are disabled
 
@@ -348,6 +349,8 @@ CONFIGURE_FLAGS=(
   --disable-devices
   --disable-encoders
   --enable-encoder=png,mjpeg,bmp
+  --enable-d3d11va
+  --enable-dxva2
   --extra-ldflags=-static-libgcc\ -static-libstdc++
   "--extra-libs=-Wl,-Bstatic -lstdc++ -lwinpthread -Wl,-Bdynamic"
 )
@@ -370,6 +373,29 @@ if ! ./configure "${CONFIGURE_FLAGS[@]}"; then
   fi
   exit 1
 fi
+
+require_config_enabled() {
+  local config_file="$1"
+  local config_name="$2"
+
+  if ! grep -q "^#define CONFIG_${config_name} 1$" "$config_file"; then
+    echo "Required FFmpeg configuration was not enabled: CONFIG_${config_name}" >&2
+    exit 1
+  fi
+}
+
+for config_name in D3D11VA DXVA2; do
+  require_config_enabled config.h "$config_name"
+done
+
+for config_name in \
+  H264_D3D11VA_HWACCEL \
+  H264_DXVA2_HWACCEL \
+  HEVC_D3D11VA_HWACCEL \
+  HEVC_DXVA2_HWACCEL; do
+  require_config_enabled config_components.h "$config_name"
+done
+
 make -j"$CPU_COUNT"
 make install
 
@@ -406,6 +432,7 @@ is_system_dll() {
 {
   echo "FFmpeg version: $FFMPEG_VERSION"
   echo "License flavor: $LICENSE_FLAVOR"
+  echo "Hardware decoding: D3D11VA, DXVA2"
   echo "Enable libuavs3d: true"
   echo "libuavs3d linkage: static"
   echo "libuavs3d revision: $UAVS3D_GIT_REF"

@@ -13,6 +13,8 @@ Each workflow builds FFmpeg shared libraries only.
 - `libuavs3d` is always built from source as a static dependency and linked into FFmpeg.
 - `libdavs2` (`davs2-10bit`) is built from source and linked statically when `license_flavor=gpl`.
 - Runtime artifacts do not include separate `libuavs3d`/`libdavs2` dynamic libraries.
+- The macOS runtime enables VideoToolbox hardware decoding.
+- The Windows runtime enables D3D11VA and DXVA2 hardware decoding through Windows system APIs without additional runtime DLLs.
 
 The build downloads third-party sources into the workflow temp work root (`$RUNNER_TEMP/ffmpeg-runtime-build` in GitHub Actions) and applies a small set of local patches across both `davs2-10bit` and FFmpeg:
 
