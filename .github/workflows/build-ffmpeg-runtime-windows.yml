@@ -1,10 +1,10 @@
-name: FFmpeg Runtime Windows win64 (7.1.3 GPL)
+name: FFmpeg Runtime Windows win64 (9.0.2 GPL)
 
 on:
   workflow_dispatch:
 
 env:
-  FFMPEG_VERSION: "7.1.3"
+  FFMPEG_VERSION: "9.0.2"
   LICENSE_FLAVOR: "gpl"
   WORK_ROOT_DIR: ffmpeg-runtime-build
 
@@ -44,6 +44,16 @@ jobs:
             "$FFMPEG_VERSION" \
             "$LICENSE_FLAVOR" \
             "$WORK_ROOT_UNIX"
+
+      - name: Verify packaged runtime
+        shell: msys2 {0}
+        run: |
+          ROOT="$(cygpath -u "$RUNNER_TEMP/$WORK_ROOT_DIR")"
+          gcc -O2 -Wall -Wextra -I"$ROOT/install/include" tools/verify_runtime.c \
+            -L"$ROOT/install/lib" -lavformat -lavcodec -lavutil \
+            -lavdevice -lavfilter -lswscale -lswresample \
+            -o "$ROOT/package/verify_runtime.exe"
+          "$ROOT/package/verify_runtime.exe"
 
       - name: Upload runtime artifact
         uses: actions/upload-artifact@v4

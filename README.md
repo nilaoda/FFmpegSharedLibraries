@@ -27,28 +27,76 @@ The build downloads third-party sources into the workflow temp work root (`$RUNN
 - `patches/davs2-10bit/0003-fix-dpb-stale-ref-frames.patch`
   - fixes a hang in the DPB (decoded picture buffer) allocation loop that can occur with certain AVS2 streams,
   - recycles stale reference frames that have `b_refered_by_others==1 && i_ref_count==0` (zombie frames never cleaned by the RPS) instead of blocking the pipeline forever.
-- `patches/ffmpeg/0001-libdavs2-export-pkt_pos-from-decoder-output.patch`
-  - maps `libdavs2` packet position metadata to FFmpeg frame `pkt_pos`.
-- `patches/ffmpeg/0002-libcavs-fix-macos-build-compat.patch`
-  - fixes `libcavs` build compatibility on macOS.
-- `patches/ffmpeg/0003-libcavs-export-pkt_pos-and-simplify-profile-name.patch`
-  - exports `pkt_pos` for `libcavs` decoded frames,
-  - simplifies the reported CAVS profile name.
-- `patches/ffmpeg/0004-libcavs-fix-reordered-frame-props.patch`
-  - fixes reordered-frame property propagation in `libcavs`.
-- `patches/ffmpeg/0005-cavs-parser-mark-key-packets.patch`
-  - improves CAVS parser key-packet marking.
-- `patches/ffmpeg/0006-cavsvideo-fix-backward-seek-and-key-pos.patch`
-  - adjusts raw CAVS demuxing / indexing behavior for backward seek and keyframe position handling.
+- [`patches/ffmpeg/0001-avs-dra-runtime.patch`](./patches/ffmpeg/0001-avs-dra-runtime.patch)
+  - vendors the existing native AVS+/DRA decoders and ports their integration to FFmpeg 9,
+  - preserves the upstream 9.x CAVS parser's sequence-header parsing,
+  - fixes CAVS packet provenance through asynchronous decoding and frame reordering,
+  - exports optional decoder-side byte positions for AVS+/AVS2/AVS3 without restoring the removed `AVFrame.pkt_pos` ABI member.
+
+See [`patches/ffmpeg/README.md`](./patches/ffmpeg/README.md) for source provenance,
+position metadata, allocation behavior and the decoder-specific opaque contract.
 
 ## Workflow Inputs
 
 All build workflows are fixed to:
 
-- `ffmpeg_version`: `7.1.3`
+- `ffmpeg_version`: `9.0.2`
 - `license_flavor`: `gpl`
 
 Manual runs use `workflow_dispatch` without custom input fields.
+
+Build scripts accept FFmpeg `9.0.x` only. Build concurrency defaults to at most
+four jobs to limit peak compiler memory; set `BUILD_JOBS` to override it.
+
+## FFmpeg 9 ABI
+
+| Library | ABI major |
+| --- | ---: |
+| avutil | 61 |
+| avcodec | 63 |
+| avformat | 63 |
+| avdevice | 63 |
+| avfilter | 12 |
+| swscale | 10 |
+| swresample | 7 |
+
+`libpostproc` was removed upstream and is no longer packaged. These libraries
+require FFmpeg 9 bindings and cannot replace the current TSCutter 7.x runtime.
+macOS packaging rewrites dependencies to `@loader_path` and renews the ad-hoc
+signature after rewriting, so ARM64 libraries can load from the flat package.
+
+## Verification
+
+All workflows compile and run `tools/verify_runtime.c` against the **packaged**
+runtime before uploading it. This checks loading, ABI majors and registration of
+`cavs`, `libdra`, `libdavs2` and `libuavs3d` in the GPL builds.
+
+The verifier also accepts a local sample. It decodes a bounded window, checks
+packet position metadata and key-packet provenance, then seeks, flushes and
+decodes another window with position export disabled. For example, after a
+macOS build:
+
+```sh
+ROOT=/absolute/path/to/work-root
+clang -O2 -Wall -Wextra -I"$ROOT/install/include" tools/verify_runtime.c \
+  "$ROOT/package/libavformat.63.dylib" \
+  "$ROOT/package/libavcodec.63.dylib" \
+  "$ROOT/package/libavutil.61.dylib" \
+  "$ROOT/package/libavdevice.63.dylib" \
+  "$ROOT/package/libavfilter.12.dylib" \
+  "$ROOT/package/libswscale.10.dylib" \
+  "$ROOT/package/libswresample.7.dylib" -o "$ROOT/package/verify_runtime"
+"$ROOT/package/verify_runtime" /path/to/AVS2.ts
+"$ROOT/package/verify_runtime" /path/to/DRA.ts dra
+"$ROOT/package/verify_runtime" /path/to/raw.cavs cavsvideo
+```
+
+Use `audio` to select the best audio track, `dra` to explicitly select a DRA
+track, or `cavsvideo` to force the raw CAVS demuxer. An optional fourth argument
+sets the frame limit (1–10000); limits above 64 replay TS input from byte zero
+after draining, which also supports short inputs containing a single keyframe.
+Sample files are not bundled
+with the repository or uploaded by the workflows.
 
 ## Third-Party Libraries
 

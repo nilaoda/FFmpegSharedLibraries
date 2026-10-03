@@ -41,17 +41,7 @@ DAVS2_INSTALL_ROOT="$WORK_ROOT/davs2-install"
 DAVS2_PATCH_PATH="$REPO_ROOT/patches/davs2-10bit/0001-enable-10bit-build-and-propagate-frame-packet-position.patch"
 DAVS2_COMPAT_PATCH_PATH="$REPO_ROOT/patches/davs2-10bit/0002-x86-build-avx-codepaths-as-dispatch-only.patch"
 DAVS2_DPB_FIX_PATCH_PATH="$REPO_ROOT/patches/davs2-10bit/0003-fix-dpb-stale-ref-frames.patch"
-FFMPEG_DAVS2_PATCH_PATH="$REPO_ROOT/patches/ffmpeg/0001-libdavs2-export-pkt_pos-from-decoder-output.patch"
-FFMPEG_CAVS_DRA_FIX_PATCH_PATH="$REPO_ROOT/patches/ffmpeg/0003-libcavs-export-pkt_pos-and-simplify-profile-name.patch"
-FFMPEG_CAVS_DRA_FRAME_PROPS_PATCH_PATH="$REPO_ROOT/patches/ffmpeg/0004-libcavs-fix-reordered-frame-props.patch"
-FFMPEG_CAVS_PARSER_FIX_PATCH_PATH="$REPO_ROOT/patches/ffmpeg/0005-cavs-parser-mark-key-packets.patch"
-FFMPEG_CAVS_SEEK_CUT_PATCH_PATH="$REPO_ROOT/patches/ffmpeg/0006-cavsvideo-fix-backward-seek-and-key-pos.patch"
-DEFAULT_CAVS_DRA_PATCH_PATH="/Users/macmini/code/GitHub/ffmpeg_cavs_dra/ffmpeg-7.1.2_cavs_dra.patch"
-CAVS_DRA_GIT_URL="https://github.com/maliwen2015/ffmpeg_cavs_dra.git"
-CAVS_DRA_GIT_REF="${CAVS_DRA_GIT_REF:-abae276fed97ce08928f25c8f5e03fd915687f54}"
-CAVS_DRA_SOURCE_DIR="$SOURCE_ROOT/ffmpeg_cavs_dra"
-CAVS_DRA_PATCH_CACHE_PATH="$CAVS_DRA_SOURCE_DIR/ffmpeg-7.1.2_cavs_dra.patch"
-FFMPEG_CAVS_DRA_PATCH_PATH="${FFMPEG_CAVS_DRA_PATCH_PATH:-}"
+FFMPEG_RUNTIME_PATCH_PATH="$REPO_ROOT/patches/ffmpeg/0001-avs-dra-runtime.patch"
 INSTALL_ROOT="$WORK_ROOT/install"
 PACKAGE_ROOT="$WORK_ROOT/package"
 RUNTIME_ROOT="$PACKAGE_ROOT"
@@ -59,18 +49,30 @@ ARTIFACT_ROOT="$WORK_ROOT/artifacts"
 PACKAGE_NAME="ffmpeg-runtime-win64-$LICENSE_FLAVOR-shared-$FFMPEG_VERSION"
 ARTIFACT_PATH="$ARTIFACT_ROOT/$PACKAGE_NAME.zip"
 PKG_CONFIG_BIN="${PKG_CONFIG_BIN:-pkgconf}"
-CPU_COUNT="$(nproc)"
+CPU_COUNT="${BUILD_JOBS:-$(nproc)}"
 ENABLE_LIBDAVS2=false
 
+case "$FFMPEG_VERSION" in
+  9.0.*) ;;
+  *) echo "This patch set targets FFmpeg 9.0.x: $FFMPEG_VERSION" >&2; exit 1 ;;
+esac
+if [[ ! "$CPU_COUNT" =~ ^[1-9][0-9]*$ ]]; then
+  echo "BUILD_JOBS must be a positive integer" >&2
+  exit 1
+fi
+# Keep peak compiler memory bounded; an explicit BUILD_JOBS overrides the cap.
+if [[ -z "${BUILD_JOBS:-}" && "$CPU_COUNT" -gt 4 ]]; then
+  CPU_COUNT=4
+fi
+
 LIBRARY_NAMES=(
-  avutil-59.dll
-  swresample-5.dll
-  swscale-8.dll
-  avcodec-61.dll
-  avformat-61.dll
-  avfilter-10.dll
-  avdevice-61.dll
-  postproc-58.dll
+  avutil-61.dll
+  swresample-7.dll
+  swscale-10.dll
+  avcodec-63.dll
+  avformat-63.dll
+  avfilter-12.dll
+  avdevice-63.dll
 )
 
 SYSTEM_DLL_PATTERNS=(
@@ -93,11 +95,15 @@ SYSTEM_DLL_PATTERNS=(
 mkdir -p "$SOURCE_ROOT" "$INSTALL_ROOT" "$RUNTIME_ROOT" "$ARTIFACT_ROOT"
 
 if [[ ! -f "$SOURCE_ARCHIVE" ]]; then
-  curl -L "$SOURCE_URL" -o "$SOURCE_ARCHIVE"
+  curl -fL --retry 3 "$SOURCE_URL" -o "$SOURCE_ARCHIVE"
 fi
 
 rm -rf "$SOURCE_DIR"
 tar -xf "$SOURCE_ARCHIVE" -C "$SOURCE_ROOT"
+
+# Apply exactly to this extracted tree, even when WORK_ROOT is inside this repository.
+patch -d "$SOURCE_DIR" -p1 --batch --forward --fuzz=0 --dry-run <"$FFMPEG_RUNTIME_PATCH_PATH" >/dev/null
+patch -d "$SOURCE_DIR" -p1 --batch --forward --fuzz=0 <"$FFMPEG_RUNTIME_PATCH_PATH"
 
 rm -rf "$INSTALL_ROOT" "$PACKAGE_ROOT" "$UAVS3D_INSTALL_ROOT" "$UAVS3D_SOURCE_DIR" "$DAVS2_INSTALL_ROOT" "$DAVS2_SOURCE_DIR"
 mkdir -p "$INSTALL_ROOT" "$RUNTIME_ROOT" "$UAVS3D_INSTALL_ROOT"
@@ -224,92 +230,6 @@ EOF
     echo "Dynamic libdavs2 artifacts were produced unexpectedly" >&2
     exit 1
   fi
-fi
-
-if [[ "$ENABLE_LIBDAVS2" == true ]]; then
-  if [[ ! -f "$FFMPEG_DAVS2_PATCH_PATH" ]]; then
-    echo "Missing FFmpeg davs2 patch file: $FFMPEG_DAVS2_PATCH_PATH" >&2
-    exit 1
-  fi
-  if ! patch -d "$SOURCE_DIR" -p1 --forward <"$FFMPEG_DAVS2_PATCH_PATH"; then
-    patch -d "$SOURCE_DIR" -p1 --forward -l <"$FFMPEG_DAVS2_PATCH_PATH"
-  fi
-fi
-
-if [[ -z "$FFMPEG_CAVS_DRA_PATCH_PATH" ]]; then
-  if [[ -f "$DEFAULT_CAVS_DRA_PATCH_PATH" ]]; then
-    FFMPEG_CAVS_DRA_PATCH_PATH="$DEFAULT_CAVS_DRA_PATCH_PATH"
-  else
-    rm -rf "$CAVS_DRA_SOURCE_DIR"
-    git init "$CAVS_DRA_SOURCE_DIR" >/dev/null
-    git -C "$CAVS_DRA_SOURCE_DIR" remote add origin "$CAVS_DRA_GIT_URL"
-    git -C "$CAVS_DRA_SOURCE_DIR" fetch --depth 1 origin "$CAVS_DRA_GIT_REF"
-    git -C "$CAVS_DRA_SOURCE_DIR" checkout --detach FETCH_HEAD
-    FFMPEG_CAVS_DRA_PATCH_PATH="$CAVS_DRA_PATCH_CACHE_PATH"
-  fi
-fi
-
-if [[ ! -f "$FFMPEG_CAVS_DRA_PATCH_PATH" ]]; then
-  echo "Missing FFmpeg cavs/dra patch file: $FFMPEG_CAVS_DRA_PATCH_PATH" >&2
-  exit 1
-fi
-
-if ! git -C "$SOURCE_DIR" apply -p2 --check "$FFMPEG_CAVS_DRA_PATCH_PATH" 2>/dev/null; then
-  if ! git -C "$SOURCE_DIR" apply -p2 --check --recount --ignore-space-change --ignore-whitespace "$FFMPEG_CAVS_DRA_PATCH_PATH" 2>/dev/null; then
-    echo "Failed to validate FFmpeg cavs/dra patch against ffmpeg-$FFMPEG_VERSION" >&2
-    exit 1
-  fi
-fi
-
-if ! git -C "$SOURCE_DIR" apply -p2 "$FFMPEG_CAVS_DRA_PATCH_PATH" 2>/dev/null; then
-  git -C "$SOURCE_DIR" apply -p2 --recount --ignore-space-change --ignore-whitespace "$FFMPEG_CAVS_DRA_PATCH_PATH"
-fi
-
-if [[ ! -f "$FFMPEG_CAVS_DRA_FIX_PATCH_PATH" ]]; then
-  echo "Missing FFmpeg cavs/dra fix patch file: $FFMPEG_CAVS_DRA_FIX_PATCH_PATH" >&2
-  exit 1
-fi
-
-for source_file in \
-  "$SOURCE_DIR/libavcodec/libcavsdec.c" \
-  "$SOURCE_DIR/libavcodec/codec_desc.c" \
-  "$SOURCE_DIR/libavcodec/cavsdec.c"; do
-  perl -i -pe 's/\r$//' "$source_file"
-done
-
-if ! patch -d "$SOURCE_DIR" -p1 --batch --forward -N -l <"$FFMPEG_CAVS_DRA_FIX_PATCH_PATH"; then
-  echo "Failed to apply FFmpeg cavs/dra fix patch: $FFMPEG_CAVS_DRA_FIX_PATCH_PATH" >&2
-  exit 1
-fi
-
-if [[ ! -f "$FFMPEG_CAVS_DRA_FRAME_PROPS_PATCH_PATH" ]]; then
-  echo "Missing FFmpeg cavs/dra frame props patch file: $FFMPEG_CAVS_DRA_FRAME_PROPS_PATCH_PATH" >&2
-  exit 1
-fi
-
-if ! patch -d "$SOURCE_DIR" -p1 --batch --forward -N -l <"$FFMPEG_CAVS_DRA_FRAME_PROPS_PATCH_PATH"; then
-  echo "Failed to apply FFmpeg cavs/dra frame props patch: $FFMPEG_CAVS_DRA_FRAME_PROPS_PATCH_PATH" >&2
-  exit 1
-fi
-
-if [[ ! -f "$FFMPEG_CAVS_PARSER_FIX_PATCH_PATH" ]]; then
-  echo "Missing FFmpeg cavs parser fix patch file: $FFMPEG_CAVS_PARSER_FIX_PATCH_PATH" >&2
-  exit 1
-fi
-
-if ! patch -d "$SOURCE_DIR" -p1 --batch --forward -N -l <"$FFMPEG_CAVS_PARSER_FIX_PATCH_PATH"; then
-  echo "Failed to apply FFmpeg cavs parser fix patch: $FFMPEG_CAVS_PARSER_FIX_PATCH_PATH" >&2
-  exit 1
-fi
-
-if [[ ! -f "$FFMPEG_CAVS_SEEK_CUT_PATCH_PATH" ]]; then
-  echo "Missing FFmpeg cavs seek/cut patch file: $FFMPEG_CAVS_SEEK_CUT_PATCH_PATH" >&2
-  exit 1
-fi
-
-if ! patch -d "$SOURCE_DIR" -p1 --batch --forward -N -l <"$FFMPEG_CAVS_SEEK_CUT_PATCH_PATH"; then
-  echo "Failed to apply FFmpeg cavs seek/cut patch: $FFMPEG_CAVS_SEEK_CUT_PATCH_PATH" >&2
-  exit 1
 fi
 
 PKG_CONFIG_PATH_ENTRIES=("$UAVS3D_INSTALL_ROOT/lib/pkgconfig")

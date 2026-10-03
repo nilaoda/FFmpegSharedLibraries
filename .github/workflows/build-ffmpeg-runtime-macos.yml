@@ -1,10 +1,10 @@
-name: FFmpeg Runtime macOS arm64 (7.1.3 GPL)
+name: FFmpeg Runtime macOS arm64 (9.0.2 GPL)
 
 on:
   workflow_dispatch:
 
 env:
-  FFMPEG_VERSION: "7.1.3"
+  FFMPEG_VERSION: "9.0.2"
   LICENSE_FLAVOR: "gpl"
   WORK_ROOT_DIR: ffmpeg-runtime-build
 
@@ -23,6 +23,20 @@ jobs:
             "$FFMPEG_VERSION" \
             "$LICENSE_FLAVOR" \
             "$RUNNER_TEMP/$WORK_ROOT_DIR"
+
+      - name: Verify packaged runtime
+        run: |
+          ROOT="$RUNNER_TEMP/$WORK_ROOT_DIR"
+          clang -O2 -Wall -Wextra -I"$ROOT/install/include" tools/verify_runtime.c \
+            "$ROOT/package/libavformat.63.dylib" \
+            "$ROOT/package/libavcodec.63.dylib" \
+            "$ROOT/package/libavutil.61.dylib" \
+            "$ROOT/package/libavdevice.63.dylib" \
+            "$ROOT/package/libavfilter.12.dylib" \
+            "$ROOT/package/libswscale.10.dylib" \
+            "$ROOT/package/libswresample.7.dylib" \
+            -o "$ROOT/package/verify_runtime"
+          "$ROOT/package/verify_runtime"
 
       - name: Upload runtime artifact
         uses: actions/upload-artifact@v4
