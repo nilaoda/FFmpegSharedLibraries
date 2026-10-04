@@ -33,6 +33,10 @@ The build downloads third-party sources into the workflow temp work root (`$RUNN
   - fixes CAVS packet provenance through asynchronous decoding and frame reordering,
   - exports optional decoder-side byte positions for AVS+/AVS2/AVS3 without restoring the removed `AVFrame.pkt_pos` ABI member.
 
+- [`patches/ffmpeg/0002-av3a-demux-probing.patch`](./patches/ffmpeg/0002-av3a-demux-probing.patch)
+  - recognizes AV3A (Audio Vivid) in raw streams and MPEG-TS, including before program tables arrive,
+  - reads audio parameters without an AV3A decoder SDK, with bounded probing and parser buffering.
+
 See [`patches/ffmpeg/README.md`](./patches/ffmpeg/README.md) for source provenance,
 position metadata, allocation behavior and the decoder-specific opaque contract.
 
@@ -69,7 +73,8 @@ signature after rewriting, so ARM64 libraries can load from the flat package.
 
 All workflows compile and run `tools/verify_runtime.c` against the **packaged**
 runtime before uploading it. This checks loading, ABI majors and registration of
-`cavs`, `libdra`, `libdavs2` and `libuavs3d` in the GPL builds.
+`cavs`, `libdra`, `libdavs2` and `libuavs3d` in the GPL builds, plus AV3A probing
+and parsing without an audio decoder.
 
 The Windows build first checks static C++/pthread linkage with both GCC drivers
 using `tools/verify_windows_linkage.cpp`, including a thread and an exception.
@@ -109,6 +114,7 @@ with the repository or uploaded by the workflows.
 - FFmpeg: https://ffmpeg.org/
 - uavs3d: https://github.com/uavs3/uavs3d
 - davs2-10bit: https://github.com/xatabhk/davs2-10bit
+- AV3A AATF table/header source: https://github.com/openharmony/third_party_ffmpeg
 - ffmpeg_cavs_dra patch source: https://github.com/maliwen2015/ffmpeg_cavs_dra
 
 ## Workflows

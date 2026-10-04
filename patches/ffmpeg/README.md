@@ -58,3 +58,16 @@ their upstream API and can use that standard path as supported by the decoder.
 
 The public FFmpeg 9 frame/packet layouts are unchanged; the removed `pkt_pos`
 member is not reintroduced. Consumers must use bindings for the 9.x ABI.
+
+## AV3A identification without a decoder
+
+`0002-av3a-demux-probing.patch` applies after `0001` on FFmpeg 9.0.2.
+The AATF header fields and bit-rate/channel tables derive from Shuai Liu's
+LGPL AV3A integration in [OpenHarmony FFmpeg](https://github.com/openharmony/third_party_ffmpeg).
+Original copyright and LGPL notices are retained.
+
+The patch adds the AV3A codec descriptor, raw demuxer, frame parser, MPEG-TS
+signalling and content-probe mapping. It reads audio parameters without an
+AV3A decoder or renderer SDK. Probing validates three consecutive frames within
+64 KiB of the existing buffer; parsing bounds malformed-input buffering and
+preserves known channel layouts. Program information still requires PAT/PMT.

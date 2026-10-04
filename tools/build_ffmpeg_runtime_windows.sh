@@ -42,6 +42,7 @@ DAVS2_PATCH_PATH="$REPO_ROOT/patches/davs2-10bit/0001-enable-10bit-build-and-pro
 DAVS2_COMPAT_PATCH_PATH="$REPO_ROOT/patches/davs2-10bit/0002-x86-build-avx-codepaths-as-dispatch-only.patch"
 DAVS2_DPB_FIX_PATCH_PATH="$REPO_ROOT/patches/davs2-10bit/0003-fix-dpb-stale-ref-frames.patch"
 FFMPEG_RUNTIME_PATCH_PATH="$REPO_ROOT/patches/ffmpeg/0001-avs-dra-runtime.patch"
+FFMPEG_AV3A_PATCH_PATH="$REPO_ROOT/patches/ffmpeg/0002-av3a-demux-probing.patch"
 INSTALL_ROOT="$WORK_ROOT/install"
 PACKAGE_ROOT="$WORK_ROOT/package"
 RUNTIME_ROOT="$PACKAGE_ROOT"
@@ -145,6 +146,9 @@ tar -xf "$SOURCE_ARCHIVE" -C "$SOURCE_ROOT"
 # Apply exactly to this extracted tree, even when WORK_ROOT is inside this repository.
 patch -d "$SOURCE_DIR" -p1 --batch --forward --fuzz=0 --dry-run <"$FFMPEG_RUNTIME_PATCH_PATH" >/dev/null
 patch -d "$SOURCE_DIR" -p1 --batch --forward --fuzz=0 <"$FFMPEG_RUNTIME_PATCH_PATH"
+# AV3A 只增加探测和帧头解析，不依赖音频解码 SDK。
+patch -d "$SOURCE_DIR" -p1 --batch --forward --fuzz=0 --dry-run <"$FFMPEG_AV3A_PATCH_PATH" >/dev/null
+patch -d "$SOURCE_DIR" -p1 --batch --forward --fuzz=0 <"$FFMPEG_AV3A_PATCH_PATH"
 
 rm -rf "$INSTALL_ROOT" "$PACKAGE_ROOT" "$UAVS3D_INSTALL_ROOT" "$UAVS3D_SOURCE_DIR" "$DAVS2_INSTALL_ROOT" "$DAVS2_SOURCE_DIR"
 mkdir -p "$INSTALL_ROOT" "$RUNTIME_ROOT" "$UAVS3D_INSTALL_ROOT"

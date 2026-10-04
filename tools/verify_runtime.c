@@ -12,6 +12,7 @@
 #include "libavutil/opt.h"
 #include "libswresample/swresample.h"
 #include "libswscale/swscale.h"
+#include "verify_av3a.h"
 
 typedef struct SeenPacket {
     int64_t pos;
@@ -136,6 +137,8 @@ int main(int argc, char **argv)
             return 1;
         }
     }
+    if (verify_av3a())
+        return 1;
     if (argc < 2)
         return 0;
     if (argc > 3) {

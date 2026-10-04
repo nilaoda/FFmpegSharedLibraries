@@ -1,0 +1,511 @@
+diff --git a/configure b/configure
+index 51f0742..ea015ff 100755
+--- a/configure
++++ b/configure
+@@ -3905,6 +3905,7 @@ videotoolbox_deps="corefoundation coremedia corevideo VTDecompressionSessionDeco
+ videotoolbox_encoder_deps="videotoolbox VTCompressionSessionPrepareToEncodeFrames"
+ 
+ # demuxers / muxers
++av3a_demuxer_select="av3a_parser"
+ ac3_demuxer_select="ac3_parser"
+ act_demuxer_select="riffdec"
+ adts_muxer_select="mpeg4audio"
+diff --git a/libavcodec/Makefile b/libavcodec/Makefile
+index 5b5ee71..b73609d 100644
+--- a/libavcodec/Makefile
++++ b/libavcodec/Makefile
+@@ -1242,6 +1242,7 @@ OBJS-$(CONFIG_APV_PARSER)              += apv_parser.o
+ OBJS-$(CONFIG_AV1_PARSER)              += av1_parser.o av1_parse.o
+ OBJS-$(CONFIG_AVS2_PARSER)             += avs2.o avs2_parser.o
+ OBJS-$(CONFIG_AVS3_PARSER)             += avs3_parser.o
++OBJS-$(CONFIG_AV3A_PARSER)             += av3a_parser.o av3a_parse.o
+ OBJS-$(CONFIG_BMP_PARSER)              += bmp_parser.o
+ OBJS-$(CONFIG_CAVSVIDEO_PARSER)        += cavs_parser.o
+ OBJS-$(CONFIG_COOK_PARSER)             += cook_parser.o
+diff --git a/libavcodec/av3a_parse.c b/libavcodec/av3a_parse.c
+new file mode 100644
+index 0000000..f1822ff
+--- /dev/null
++++ b/libavcodec/av3a_parse.c
+@@ -0,0 +1,128 @@
++/*
++ * AV3A Common Header File
++ *
++ * Copyright (c) 2024 Shuai Liu <cqliushuai@outlook.com>
++ *
++ * This file is part of FFmpeg.
++ *
++ * FFmpeg is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * FFmpeg is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with FFmpeg; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
++ */
++
++#include "av3a_parse.h"
++#include "libavutil/error.h"
++
++/* 码率和声道配置沿用 OpenHarmony 的 AV3A AATF 表；码率单位为 kbit/s。 */
++static const uint16_t bit_rates[14][16] = {
++    { 16, 32, 44, 56, 64, 72, 80, 96, 128, 144, 164, 192, 0, 0, 0, 0 },
++    { 24, 32, 48, 64, 80, 96, 128, 144, 192, 256, 320, 0, 0, 0, 0, 0 },
++    { 192, 256, 320, 384, 448, 512, 640, 720, 144, 96, 128, 160, 0, 0, 0, 0 },
++    { 192, 480, 256, 384, 576, 640, 128, 160, 0, 0, 0, 0, 0, 0, 0, 0 },
++    { 0 },
++    { 0 },
++    { 48, 96, 128, 192, 256, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
++    { 152, 320, 480, 576, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
++    { 176, 384, 576, 704, 256, 448, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
++    { 216, 480, 576, 384, 768, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
++    { 240, 608, 384, 512, 832, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
++    { 48, 96, 128, 192, 256, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
++    { 192, 256, 320, 384, 480, 512, 640, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
++    { 256, 320, 384, 512, 640, 896, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
++};
++static const int sample_rates[] = {192000, 96000, 48000, 44100, 32000, 24000, 22050, 16000, 8000};
++static const uint8_t channels[] = {1, 2, 6, 8, 0, 0, 4, 8, 10, 10, 12, 4, 9, 16};
++
++/* 每次只访问字段覆盖的字节，避免在探测缓冲尾部越界读取。 */
++static unsigned read_bits(const uint8_t *buf, int *pos, int count)
++{
++    unsigned value = 0;
++    while (count--) {
++        value = (value << 1) | ((buf[*pos / 8] >> (7 - *pos % 8)) & 1);
++        (*pos)++;
++    }
++    return value;
++}
++
++int avpriv_av3a_parse_header(const uint8_t *buf, int size, AV3AHeader *hdr)
++{
++    int pos = 16, profile, rate_index, channel_index = 0, objects = 0;
++    int rate = 0, resolution, nn_type;
++    AV3AHeader result;
++
++    if (size < AV3A_HEADER_SIZE || buf[0] != 0xff || buf[1] != 0xf2)
++        return AVERROR_INVALIDDATA;
++    /* 当前支持有损 AATF；保留字段和未定义配置不能作为格式识别依据。 */
++    if (read_bits(buf, &pos, 1))
++        return AVERROR_INVALIDDATA;
++    nn_type = read_bits(buf, &pos, 3);
++    profile = read_bits(buf, &pos, 3);
++    rate_index = read_bits(buf, &pos, 4);
++    if (nn_type > 1 || profile > 2 || rate_index >= 9)
++        return AVERROR_INVALIDDATA;
++    pos += 8; /* 第一段 CRC。 */
++
++    if (profile == 0) {
++        channel_index = read_bits(buf, &pos, 7);
++        if (channel_index > 10 || !channels[channel_index])
++            return AVERROR_INVALIDDATA;
++    } else if (profile == 1) {
++        int soundbed = read_bits(buf, &pos, 2);
++        if (soundbed > 1)
++            return AVERROR_INVALIDDATA;
++        if (soundbed) {
++            channel_index = read_bits(buf, &pos, 7);
++            if (channel_index < 1 || channel_index > 10 || !channels[channel_index])
++                return AVERROR_INVALIDDATA;
++            rate = bit_rates[channel_index][read_bits(buf, &pos, 4)];
++            if (!rate)
++                return AVERROR_INVALIDDATA;
++        }
++        objects = read_bits(buf, &pos, 7) + 1;
++        {
++            int object_rate = bit_rates[0][read_bits(buf, &pos, 4)];
++            if (!object_rate)
++                return AVERROR_INVALIDDATA;
++            rate += object_rate * objects;
++        }
++        if (!soundbed)
++            channel_index = -1;
++    } else {
++        int order = read_bits(buf, &pos, 4);
++        if (order > 2)
++            return AVERROR_INVALIDDATA;
++        channel_index = 11 + order;
++    }
++    resolution = read_bits(buf, &pos, 2);
++    if (resolution > 2)
++        return AVERROR_INVALIDDATA;
++    if (profile != 1) {
++        rate = bit_rates[channel_index][read_bits(buf, &pos, 4)];
++        if (!rate)
++            return AVERROR_INVALIDDATA;
++    }
++    pos += 8; /* 第二段 CRC。 */
++    result.sample_rate = sample_rates[rate_index];
++    result.channels = (channel_index < 0 ? 0 : channels[channel_index]) + objects;
++    result.bit_rate = rate * 1000;
++    result.bits_per_sample = (resolution + 1) * 8;
++    /* 整数向上取整，避免浮点误差和 libm 开销。 */
++    result.frame_size = ((int64_t)result.bit_rate * AV3A_FRAME_SAMPLES +
++                         result.sample_rate * 8 - 1) / (result.sample_rate * 8);
++    if (result.frame_size < (pos + 7) / 8 || result.frame_size > AV3A_MAX_FRAME_SIZE)
++        return AVERROR_INVALIDDATA;
++    result.profile = profile;
++    result.nn_type = nn_type;
++    *hdr = result;
++    return 0;
++}
+diff --git a/libavcodec/av3a_parse.h b/libavcodec/av3a_parse.h
+new file mode 100644
+index 0000000..bf786bd
+--- /dev/null
++++ b/libavcodec/av3a_parse.h
+@@ -0,0 +1,45 @@
++/*
++ * AV3A Common Header File
++ *
++ * Copyright (c) 2024 Shuai Liu <cqliushuai@outlook.com>
++ *
++ * This file is part of FFmpeg.
++ *
++ * FFmpeg is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * FFmpeg is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with FFmpeg; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
++ */
++
++#ifndef AVCODEC_AV3A_PARSE_H
++#define AVCODEC_AV3A_PARSE_H
++
++#include <stdint.h>
++
++#define AV3A_HEADER_SIZE 9
++#define AV3A_FRAME_SAMPLES 1024
++#define AV3A_MAX_FRAME_SIZE 65536
++
++typedef struct AV3AHeader {
++    int sample_rate;
++    int channels;
++    int bit_rate;
++    int bits_per_sample;
++    int frame_size;
++    int profile;
++    int nn_type;
++} AV3AHeader;
++
++/* 只读取实际存在的头部字节，不要求输入带额外填充，也不分配内存。 */
++int avpriv_av3a_parse_header(const uint8_t *buf, int size, AV3AHeader *hdr);
++
++#endif
+diff --git a/libavcodec/av3a_parser.c b/libavcodec/av3a_parser.c
+new file mode 100644
+index 0000000..657cd6b
+--- /dev/null
++++ b/libavcodec/av3a_parser.c
+@@ -0,0 +1,127 @@
++/*
++ * AV3A Common Header File
++ *
++ * Copyright (c) 2024 Shuai Liu <cqliushuai@outlook.com>
++ *
++ * This file is part of FFmpeg.
++ *
++ * FFmpeg is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * FFmpeg is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with FFmpeg; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
++ */
++
++#include <string.h>
++#include "libavutil/channel_layout.h"
++#include "libavutil/common.h"
++#include "parser.h"
++#include "parser_internal.h"
++#include "av3a_parse.h"
++
++typedef struct AV3AParseContext {
++    ParseContext pc;
++    uint8_t header[AV3A_HEADER_SIZE];
++    int header_bytes;
++    int remaining;
++} AV3AParseContext;
++
++static int av3a_parse(AVCodecParserContext *s1, AVCodecContext *avctx,
++                      const uint8_t **poutbuf, int *poutbuf_size,
++                      const uint8_t *buf, int buf_size)
++{
++    AV3AParseContext *s = s1->priv_data;
++    ParseContext *pc = &s->pc;
++    AV3AHeader hdr;
++    int i = END_NOT_FOUND;
++
++    if (s1->flags & PARSER_FLAG_COMPLETE_FRAMES) {
++        i = buf_size;
++    } else {
++        /* 先消费已确认帧的载荷；只在寻找帧头时逐字节检查。 */
++        if (s->remaining <= buf_size) {
++            if (s->remaining) {
++                i = s->remaining;
++                s->remaining = 0;
++            } else {
++                int found = 0;
++                /* 损坏输入最多缓存一帧上限，随后丢弃同步状态并继续寻找。 */
++                int scan_size = FFMIN(buf_size, AV3A_MAX_FRAME_SIZE - pc->index);
++                for (i = 0; i < scan_size; i++) {
++                    if (s->header_bytes == AV3A_HEADER_SIZE) {
++                        memmove(s->header, s->header + 1, AV3A_HEADER_SIZE - 1);
++                        s->header_bytes--;
++                    }
++                    s->header[s->header_bytes++] = buf[i];
++                    if (avpriv_av3a_parse_header(s->header, s->header_bytes, &hdr) >= 0) {
++                        found = 1;
++                        i -= AV3A_HEADER_SIZE - 1;
++                        s->header_bytes = 0;
++                        s->remaining = hdr.frame_size;
++                        /* 帧头可能跨越两次输入，交由 ff_combine_frame 保留重叠字节。 */
++                        if (pc->index + i <= 0) {
++                            if (s->remaining + i <= buf_size) {
++                                i += s->remaining;
++                                s->remaining = 0;
++                            } else {
++                                s->remaining += i;
++                                i = END_NOT_FOUND;
++                            }
++                        } else if (i < 0) {
++                            s->remaining += i;
++                        }
++                        break;
++                    }
++                }
++                if (!found) {
++                    i = END_NOT_FOUND;
++                    if (pc->index + scan_size == AV3A_MAX_FRAME_SIZE) {
++                        i = scan_size;
++                        s->header_bytes = 0;
++                    }
++                }
++            }
++        }
++
++        if (ff_combine_frame(pc, i, &buf, &buf_size) < 0) {
++            s->remaining -= FFMIN(s->remaining, buf_size);
++            *poutbuf = NULL;
++            *poutbuf_size = 0;
++            return buf_size;
++        }
++    }
++
++    s1->duration = 0;
++    if (avpriv_av3a_parse_header(buf, buf_size, &hdr) >= 0 && buf_size >= hdr.frame_size) {
++        avctx->sample_rate = hdr.sample_rate;
++        avctx->bit_rate = hdr.bit_rate;
++        avctx->bits_per_raw_sample = hdr.bits_per_sample;
++        avctx->frame_size = AV3A_FRAME_SAMPLES;
++        /* 头部声道数包含对象音频，不能假设默认扬声器排列。 */
++        if (avctx->ch_layout.nb_channels != hdr.channels) {
++            av_channel_layout_uninit(&avctx->ch_layout);
++            avctx->ch_layout.order = AV_CHANNEL_ORDER_UNSPEC;
++            avctx->ch_layout.nb_channels = hdr.channels;
++        }
++        s1->duration = AV3A_FRAME_SAMPLES;
++        s1->key_frame = 1;
++    }
++    *poutbuf = buf;
++    *poutbuf_size = buf_size;
++    return i;
++}
++
++const FFCodecParser ff_av3a_parser = {
++    PARSER_CODEC_LIST(AV_CODEC_ID_AV3A),
++    .priv_data_size = sizeof(AV3AParseContext),
++    .parse = av3a_parse,
++    .close = ff_parse_close,
++};
+diff --git a/libavcodec/codec_desc.c b/libavcodec/codec_desc.c
+index d2f3fcc..1ea2b11 100644
+--- a/libavcodec/codec_desc.c
++++ b/libavcodec/codec_desc.c
+@@ -3565,6 +3565,14 @@ static const AVCodecDescriptor codec_descriptors[] = {
+         .props     = AV_CODEC_PROP_INTRA_ONLY | AV_CODEC_PROP_LOSSY,
+     },
+ 
++    {
++        .id        = AV_CODEC_ID_AV3A,
++        .type      = AVMEDIA_TYPE_AUDIO,
++        .name      = "av3a",
++        .long_name = NULL_IF_CONFIG_SMALL("AV3A (Audio Vivid)"),
++        .props     = AV_CODEC_PROP_LOSSY,
++    },
++
+     /* subtitle codecs */
+     {
+         .id        = AV_CODEC_ID_DVD_SUBTITLE,
+diff --git a/libavcodec/codec_id.h b/libavcodec/codec_id.h
+index c92074d..cf409b8 100644
+--- a/libavcodec/codec_id.h
++++ b/libavcodec/codec_id.h
+@@ -561,6 +561,7 @@ enum AVCodecID {
+     AV_CODEC_ID_APPLE_APAC,
+ 
+     AV_CODEC_ID_DRA,
++    AV_CODEC_ID_AV3A,
+ 
+     /* subtitle codecs */
+     AV_CODEC_ID_FIRST_SUBTITLE = 0x17000,          ///< A dummy ID pointing at the start of subtitle codecs.
+diff --git a/libavcodec/parsers.c b/libavcodec/parsers.c
+index b54442a..c069b05 100644
+--- a/libavcodec/parsers.c
++++ b/libavcodec/parsers.c
+@@ -31,6 +31,7 @@ extern const FFCodecParser ff_apv_parser;
+ extern const FFCodecParser ff_av1_parser;
+ extern const FFCodecParser ff_avs2_parser;
+ extern const FFCodecParser ff_avs3_parser;
++extern const FFCodecParser ff_av3a_parser;
+ extern const FFCodecParser ff_bmp_parser;
+ extern const FFCodecParser ff_cavsvideo_parser;
+ extern const FFCodecParser ff_cook_parser;
+diff --git a/libavformat/Makefile b/libavformat/Makefile
+index 0d2e757..8c942e0 100644
+--- a/libavformat/Makefile
++++ b/libavformat/Makefile
+@@ -157,6 +157,7 @@ OBJS-$(CONFIG_AVS_DEMUXER)               += avs.o voc_packet.o voc.o
+ OBJS-$(CONFIG_AVS2_DEMUXER)              += avs2dec.o rawdec.o
+ OBJS-$(CONFIG_AVS2_MUXER)                += rawenc.o
+ OBJS-$(CONFIG_AVS3_DEMUXER)              += avs3dec.o rawdec.o
++OBJS-$(CONFIG_AV3A_DEMUXER)              += av3adec.o rawdec.o
+ OBJS-$(CONFIG_AVS3_MUXER)                += rawenc.o
+ OBJS-$(CONFIG_BETHSOFTVID_DEMUXER)       += bethsoftvid.o
+ OBJS-$(CONFIG_BFI_DEMUXER)               += bfi.o
+diff --git a/libavformat/allformats.c b/libavformat/allformats.c
+index af7eea5..357122d 100644
+--- a/libavformat/allformats.c
++++ b/libavformat/allformats.c
+@@ -100,6 +100,7 @@ extern const FFInputFormat  ff_avs_demuxer;
+ extern const FFInputFormat  ff_avs2_demuxer;
+ extern const FFOutputFormat ff_avs2_muxer;
+ extern const FFInputFormat  ff_avs3_demuxer;
++extern const FFInputFormat  ff_av3a_demuxer;
+ extern const FFOutputFormat ff_avs3_muxer;
+ extern const FFInputFormat  ff_bethsoftvid_demuxer;
+ extern const FFInputFormat  ff_bfi_demuxer;
+diff --git a/libavformat/av3adec.c b/libavformat/av3adec.c
+new file mode 100644
+index 0000000..35484e8
+--- /dev/null
++++ b/libavformat/av3adec.c
+@@ -0,0 +1,64 @@
++/*
++ * AV3A Common Header File
++ *
++ * Copyright (c) 2024 Shuai Liu <cqliushuai@outlook.com>
++ *
++ * This file is part of FFmpeg.
++ *
++ * FFmpeg is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * FFmpeg is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with FFmpeg; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
++ */
++
++#include "libavcodec/av3a_parse.h"
++#include "libavutil/common.h"
++#include "avformat.h"
++#include "demux.h"
++#include "rawdec.h"
++
++static int av3a_probe(const AVProbeData *p)
++{
++    int size = FFMIN(p->buf_size, 64 * 1024);
++    /* 不依赖扩展名；未知 TS 音轨的探测没有 .av3a 文件名。 */
++    for (int start = 0; start <= size - AV3A_HEADER_SIZE; start++) {
++        AV3AHeader first, hdr;
++        int pos = start;
++        if (avpriv_av3a_parse_header(p->buf + pos, size - pos, &first) < 0)
++            continue;
++        /* 同步字与 MPEG 音频相似，必须连续验证三帧及其参数。 */
++        for (int frames = 0; frames < 3; frames++) {
++            if (avpriv_av3a_parse_header(p->buf + pos, size - pos, &hdr) < 0 ||
++                hdr.sample_rate != first.sample_rate || hdr.channels != first.channels ||
++                hdr.profile != first.profile || hdr.nn_type != first.nn_type ||
++                hdr.bits_per_sample != first.bits_per_sample || hdr.frame_size > size - pos)
++                break;
++            pos += hdr.frame_size;
++            if (frames == 2)
++                return AVPROBE_SCORE_EXTENSION + 2;
++        }
++    }
++    return 0;
++}
++
++const FFInputFormat ff_av3a_demuxer = {
++    .p.name = "av3a",
++    .p.long_name = NULL_IF_CONFIG_SMALL("raw AV3A (Audio Vivid)"),
++    .p.extensions = "av3a",
++    .p.flags = AVFMT_GENERIC_INDEX,
++    .p.priv_class = &ff_raw_demuxer_class,
++    .priv_data_size = sizeof(FFRawDemuxerContext),
++    .read_probe = av3a_probe,
++    .read_header = ff_raw_audio_read_header,
++    .read_packet = ff_raw_read_partial_packet,
++    .raw_codec_id = AV_CODEC_ID_AV3A,
++};
+diff --git a/libavformat/demux.c b/libavformat/demux.c
+index 6a79482..9141279 100644
+--- a/libavformat/demux.c
++++ b/libavformat/demux.c
+@@ -109,6 +109,7 @@ static int set_codec_from_probe_data(AVFormatContext *s, AVStream *st,
+         enum AVMediaType type;
+     } fmt_id_type[] = {
+         { "aac",        AV_CODEC_ID_AAC,          AVMEDIA_TYPE_AUDIO    },
++        { "av3a",       AV_CODEC_ID_AV3A,         AVMEDIA_TYPE_AUDIO    },
+         { "ac3",        AV_CODEC_ID_AC3,          AVMEDIA_TYPE_AUDIO    },
+         { "aptx",       AV_CODEC_ID_APTX,         AVMEDIA_TYPE_AUDIO    },
+         { "av1",        AV_CODEC_ID_AV1,          AVMEDIA_TYPE_VIDEO    },
+diff --git a/libavformat/mpegts.c b/libavformat/mpegts.c
+index 7bc3f45..dd88bd7 100644
+--- a/libavformat/mpegts.c
++++ b/libavformat/mpegts.c
+@@ -828,6 +828,7 @@ typedef struct StreamType {
+ } StreamType;
+ 
+ static const StreamType ISO_types[] = {
++    { 0xd5, AVMEDIA_TYPE_AUDIO, AV_CODEC_ID_AV3A },
+     { STREAM_TYPE_VIDEO_MPEG1,    AVMEDIA_TYPE_VIDEO, AV_CODEC_ID_MPEG2VIDEO },
+     { STREAM_TYPE_VIDEO_MPEG2,    AVMEDIA_TYPE_VIDEO, AV_CODEC_ID_MPEG2VIDEO },
+     { STREAM_TYPE_AUDIO_MPEG1,    AVMEDIA_TYPE_AUDIO, AV_CODEC_ID_MP3        },
+@@ -910,6 +911,7 @@ static const StreamType REGD_types[] = {
+     { MKTAG('V', 'C', '-', '1'), AVMEDIA_TYPE_VIDEO, AV_CODEC_ID_VC1   },
+     { MKTAG('O', 'p', 'u', 's'), AVMEDIA_TYPE_AUDIO, AV_CODEC_ID_OPUS  },
+     { MKTAG('D', 'R', 'A', '1'), AVMEDIA_TYPE_AUDIO, AV_CODEC_ID_DRA   },
++    { MKTAG('a', 'v', '3', 'a'), AVMEDIA_TYPE_AUDIO, AV_CODEC_ID_AV3A  },
+     { 0 },
+ };
+ 
