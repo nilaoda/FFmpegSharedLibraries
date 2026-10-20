@@ -37,6 +37,10 @@ The build downloads third-party sources into the workflow temp work root (`$RUNN
   - recognizes AV3A (Audio Vivid) in raw streams and MPEG-TS, including before program tables arrive,
   - reads audio parameters without an AV3A decoder SDK, with bounded probing and parser buffering.
 
+- [`patches/ffmpeg/0003-av3a-container-remux.patch`](./patches/ffmpeg/0003-av3a-container-remux.patch)
+  - adds AV3A MP4 configuration reading/writing, MPEG-TS signalling and raw-stream output,
+  - preserves compressed packets without an AV3A decoder or encoder SDK.
+
 See [`patches/ffmpeg/README.md`](./patches/ffmpeg/README.md) for source provenance,
 position metadata, allocation behavior and the decoder-specific opaque contract.
 
@@ -74,7 +78,8 @@ signature after rewriting, so ARM64 libraries can load from the flat package.
 All workflows compile and run `tools/verify_runtime.c` against the **packaged**
 runtime before uploading it. This checks loading, ABI majors and registration of
 `cavs`, `libdra`, `libdavs2` and `libuavs3d` in the GPL builds, plus AV3A probing
-and parsing without an audio decoder.
+and parsing without an audio decoder. AV3A MP4, TS and raw-stream round trips
+also check codec configuration, packet boundaries and SHA-256 payload hashes.
 
 The Windows build first checks static C++/pthread linkage with both GCC drivers
 using `tools/verify_windows_linkage.cpp`, including a thread and an exception.
@@ -102,6 +107,10 @@ clang -O2 -Wall -Wextra -I"$ROOT/install/include" tools/verify_runtime.c \
 "$ROOT/package/verify_runtime" /path/to/raw.cavs cavsvideo
 ```
 
+Use `av3a` to verify an AV3A sample through MP4, TS and raw-stream remuxing
+without decoding (for example, `"$ROOT/package/verify_runtime" /path/to/sample.mp4 av3a`).
+MKV AV3A mapping is not included.
+
 Use `audio` to select the best audio track, `dra` to explicitly select a DRA
 track, or `cavsvideo` to force the raw CAVS demuxer. An optional fourth argument
 sets the frame limit (1–10000); limits above 64 replay TS input from byte zero
@@ -114,7 +123,7 @@ with the repository or uploaded by the workflows.
 - FFmpeg: https://ffmpeg.org/
 - uavs3d: https://github.com/uavs3/uavs3d
 - davs2-10bit: https://github.com/xatabhk/davs2-10bit
-- AV3A AATF table/header source: https://github.com/openharmony/third_party_ffmpeg
+- AV3A demux/mux, AATF tables and headers: [OpenHarmony third_party_ffmpeg](https://github.com/openharmony/third_party_ffmpeg) (original container implementation: [ac883016](https://github.com/openharmony/third_party_ffmpeg/commit/ac883016d94bb95354e2824a501702f64c9ad945), Shuai Liu, 2024-11-01)
 - ffmpeg_cavs_dra patch source: https://github.com/maliwen2015/ffmpeg_cavs_dra
 
 ## Workflows

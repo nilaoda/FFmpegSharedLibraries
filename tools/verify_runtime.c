@@ -139,6 +139,8 @@ int main(int argc, char **argv)
     }
     if (verify_av3a())
         return 1;
+    if (argc > 2 && !strcmp(argv[2], "av3a"))
+        return verify_av3a_file(argv[1]);
     if (argc < 2)
         return 0;
     if (argc > 3) {

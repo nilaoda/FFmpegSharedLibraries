@@ -71,3 +71,28 @@ signalling and content-probe mapping. It reads audio parameters without an
 AV3A decoder or renderer SDK. Probing validates three consecutive frames within
 64 KiB of the existing buffer; parsing bounds malformed-input buffering and
 preserves known channel layouts. Program information still requires PAT/PMT.
+
+## AV3A container remuxing
+
+`0003-av3a-container-remux.patch` applies after `0002` on FFmpeg 9.0.2.
+The original AV3A MP4 `av3a`/`dca3`, MPEG-TS stream-type and raw muxer
+implementation comes from Shuai Liu's
+[OpenHarmony `third_party_ffmpeg` integration](https://github.com/openharmony/third_party_ffmpeg/commit/ac883016d94bb95354e2824a501702f64c9ad945),
+introduced on 2024-11-01 (`av3a格式封装和解封装`). Its `libavformat/mov.c`,
+`movenc.c` and `rawenc.c` contain the original container implementation.
+This patch adapts it to FFmpeg 9.0.2 and adds configuration validation and
+TS registration signalling. The existing bounded probe and fragmented parser
+remain in use; no decoder or renderer SDK is added.
+
+MP4 configuration uses the OpenHarmony integration's ten-byte representation:
+eight single-byte fields and a big-endian 16-bit bitrate in kbit/s. Raw/TS
+parsing supplies this configuration for remuxing; MP4 reads and writes the
+`dca3` atom with length and field validation. Missing or invalid configuration
+returns an error. Object channels retain an unspecified speaker layout, and
+ambisonic configurations retain their channel order. No private MKV codec ID
+is introduced.
+
+The packaged-runtime verifier exercises MP4, MPEG-TS and raw AV3A round trips,
+checks configuration and packet hashes, and rejects missing/truncated output
+configuration. Its optional `av3a` sample mode runs the same payload checks on
+real files without decoding or writing sample output to disk.

@@ -1,0 +1,429 @@
+diff --git a/configure b/configure
+index ea015ff..5fe43b0 100755
+--- a/configure
++++ b/configure
+@@ -3963,9 +3963,9 @@ mcc_muxer_select="smpte_436m"
+ mcc_muxer_suggest="eia608_to_smpte436m_bsf"
+ mlp_demuxer_select="mlp_parser"
+ mmf_muxer_select="riffenc"
+-mov_demuxer_select="iso_media riffdec"
++mov_demuxer_select="iso_media riffdec av3a_parser"
+ mov_demuxer_suggest="iamfdec zlib"
+-mov_muxer_select="cbs_apv_lavf cbs_av1_lavf iso_media iso_writer riffenc rtpenc_chain vp9_superframe_bsf aac_adtstoasc_bsf ac3_parser"
++mov_muxer_select="cbs_apv_lavf cbs_av1_lavf iso_media iso_writer riffenc rtpenc_chain vp9_superframe_bsf aac_adtstoasc_bsf ac3_parser av3a_parser"
+ mov_muxer_suggest="iamfenc"
+ mp3_demuxer_select="mpegaudio_parser"
+ mp3_muxer_select="mpegaudioheader"
+diff --git a/libavcodec/av3a_parse.c b/libavcodec/av3a_parse.c
+index f1822ff..2dc3896 100644
+--- a/libavcodec/av3a_parse.c
++++ b/libavcodec/av3a_parse.c
+@@ -22,6 +22,8 @@
+ 
+ #include "av3a_parse.h"
+ #include "libavutil/error.h"
++#include "libavutil/intreadwrite.h"
++#include <string.h>
+ 
+ /* 码率和声道配置沿用 OpenHarmony 的 AV3A AATF 表；码率单位为 kbit/s。 */
+ static const uint16_t bit_rates[14][16] = {
+@@ -54,11 +56,46 @@ static unsigned read_bits(const uint8_t *buf, int *pos, int count)
+     return value;
+ }
+ 
++int avpriv_av3a_parse_config(const uint8_t *buf, int size, AV3AHeader *hdr)
++{
++    AV3AHeader result = {0};
++    int count;
++    if (size != AV3A_CONFIG_SIZE || buf[0] != 2 || buf[1] >= 9 ||
++        buf[2] > 1 || buf[3] > 3 || buf[7] > 2 || !AV_RB16(buf + 8))
++        return AVERROR_INVALIDDATA;
++    if (buf[3] == 3) {
++        if (buf[6] < 1 || buf[6] > 3)
++            return AVERROR_INVALIDDATA;
++        count = (buf[6] + 1) * (buf[6] + 1);
++    } else {
++        count = 0;
++        if (buf[3] != 1) {
++            if (buf[4] > 10 || !channels[buf[4]] || (buf[3] == 2 && !buf[4]))
++                return AVERROR_INVALIDDATA;
++            count = channels[buf[4]];
++        }
++        if (buf[3] != 0) {
++            if (!buf[5] || buf[5] > 127)
++                return AVERROR_INVALIDDATA;
++            count += buf[5];
++        }
++    }
++    memcpy(result.config, buf, AV3A_CONFIG_SIZE);
++    result.sample_rate = sample_rates[buf[1]];
++    result.channels = count;
++    result.bit_rate = AV_RB16(buf + 8) * 1000;
++    result.bits_per_sample = (buf[7] + 1) * 8;
++    result.profile = buf[3] == 3 ? 2 : buf[3] != 0;
++    result.nn_type = buf[2];
++    *hdr = result;
++    return 0;
++}
++
+ int avpriv_av3a_parse_header(const uint8_t *buf, int size, AV3AHeader *hdr)
+ {
+     int pos = 16, profile, rate_index, channel_index = 0, objects = 0;
+     int rate = 0, resolution, nn_type;
+-    AV3AHeader result;
++    AV3AHeader result = {0};
+ 
+     if (size < AV3A_HEADER_SIZE || buf[0] != 0xff || buf[1] != 0xf2)
+         return AVERROR_INVALIDDATA;
+@@ -112,6 +149,15 @@ int avpriv_av3a_parse_header(const uint8_t *buf, int size, AV3AHeader *hdr)
+             return AVERROR_INVALIDDATA;
+     }
+     pos += 8; /* 第二段 CRC。 */
++    result.config[0] = 2;
++    result.config[1] = rate_index;
++    result.config[2] = nn_type;
++    result.config[3] = profile == 2 ? 3 : profile == 1 ? (channel_index < 0 ? 1 : 2) : 0;
++    result.config[4] = profile == 2 || channel_index < 0 ? 0 : channel_index;
++    result.config[5] = objects;
++    result.config[6] = profile == 2 ? channel_index - 10 : 0;
++    result.config[7] = resolution;
++    AV_WB16(result.config + 8, rate);
+     result.sample_rate = sample_rates[rate_index];
+     result.channels = (channel_index < 0 ? 0 : channels[channel_index]) + objects;
+     result.bit_rate = rate * 1000;
+diff --git a/libavcodec/av3a_parse.h b/libavcodec/av3a_parse.h
+index bf786bd..30b72ec 100644
+--- a/libavcodec/av3a_parse.h
++++ b/libavcodec/av3a_parse.h
+@@ -25,11 +25,14 @@
+ 
+ #include <stdint.h>
+ 
++#define AV3A_CONFIG_SIZE 10
+ #define AV3A_HEADER_SIZE 9
+ #define AV3A_FRAME_SAMPLES 1024
+ #define AV3A_MAX_FRAME_SIZE 65536
+ 
+ typedef struct AV3AHeader {
++    /* MP4 configuration: eight byte fields followed by big-endian kbit/s. */
++    uint8_t config[AV3A_CONFIG_SIZE];
+     int sample_rate;
+     int channels;
+     int bit_rate;
+@@ -40,6 +43,8 @@ typedef struct AV3AHeader {
+ } AV3AHeader;
+ 
+ /* 只读取实际存在的头部字节，不要求输入带额外填充，也不分配内存。 */
++int avpriv_av3a_parse_config(const uint8_t *buf, int size, AV3AHeader *hdr);
++
+ int avpriv_av3a_parse_header(const uint8_t *buf, int size, AV3AHeader *hdr);
+ 
+ #endif
+diff --git a/libavcodec/av3a_parser.c b/libavcodec/av3a_parser.c
+index 657cd6b..03540a2 100644
+--- a/libavcodec/av3a_parser.c
++++ b/libavcodec/av3a_parser.c
+@@ -23,6 +23,7 @@
+ #include <string.h>
+ #include "libavutil/channel_layout.h"
+ #include "libavutil/common.h"
++#include "libavutil/mem.h"
+ #include "parser.h"
+ #include "parser_internal.h"
+ #include "av3a_parse.h"
+@@ -101,6 +102,13 @@ static int av3a_parse(AVCodecParserContext *s1, AVCodecContext *avctx,
+ 
+     s1->duration = 0;
+     if (avpriv_av3a_parse_header(buf, buf_size, &hdr) >= 0 && buf_size >= hdr.frame_size) {
++        if (!avctx->extradata_size) {
++            avctx->extradata = av_mallocz(AV3A_CONFIG_SIZE + AV_INPUT_BUFFER_PADDING_SIZE);
++            if (!avctx->extradata)
++                return AVERROR(ENOMEM);
++            memcpy(avctx->extradata, hdr.config, AV3A_CONFIG_SIZE);
++            avctx->extradata_size = AV3A_CONFIG_SIZE;
++        }
+         avctx->sample_rate = hdr.sample_rate;
+         avctx->bit_rate = hdr.bit_rate;
+         avctx->bits_per_raw_sample = hdr.bits_per_sample;
+diff --git a/libavformat/Makefile b/libavformat/Makefile
+index 8c942e0..c968c8c 100644
+--- a/libavformat/Makefile
++++ b/libavformat/Makefile
+@@ -158,6 +158,7 @@ OBJS-$(CONFIG_AVS2_DEMUXER)              += avs2dec.o rawdec.o
+ OBJS-$(CONFIG_AVS2_MUXER)                += rawenc.o
+ OBJS-$(CONFIG_AVS3_DEMUXER)              += avs3dec.o rawdec.o
+ OBJS-$(CONFIG_AV3A_DEMUXER)              += av3adec.o rawdec.o
++OBJS-$(CONFIG_AV3A_MUXER)                += rawenc.o
+ OBJS-$(CONFIG_AVS3_MUXER)                += rawenc.o
+ OBJS-$(CONFIG_BETHSOFTVID_DEMUXER)       += bethsoftvid.o
+ OBJS-$(CONFIG_BFI_DEMUXER)               += bfi.o
+diff --git a/libavformat/allformats.c b/libavformat/allformats.c
+index 357122d..37897eb 100644
+--- a/libavformat/allformats.c
++++ b/libavformat/allformats.c
+@@ -101,6 +101,7 @@ extern const FFInputFormat  ff_avs2_demuxer;
+ extern const FFOutputFormat ff_avs2_muxer;
+ extern const FFInputFormat  ff_avs3_demuxer;
+ extern const FFInputFormat  ff_av3a_demuxer;
++extern const FFOutputFormat ff_av3a_muxer;
+ extern const FFOutputFormat ff_avs3_muxer;
+ extern const FFInputFormat  ff_bethsoftvid_demuxer;
+ extern const FFInputFormat  ff_bfi_demuxer;
+diff --git a/libavformat/isom_tags.c b/libavformat/isom_tags.c
+index c0c239d..c70b5cf 100644
+--- a/libavformat/isom_tags.c
++++ b/libavformat/isom_tags.c
+@@ -363,6 +363,7 @@ const AVCodecTag ff_codec_movaudio_tags[] = {
+     { AV_CODEC_ID_FLAC,            MKTAG('f', 'L', 'a', 'C') },
+     { AV_CODEC_ID_TRUEHD,          MKTAG('m', 'l', 'p', 'a') }, /* mp4ra.org */
+     { AV_CODEC_ID_OPUS,            MKTAG('O', 'p', 'u', 's') }, /* mp4ra.org */
++    { AV_CODEC_ID_AV3A,            MKTAG('a', 'v', '3', 'a') },
+     { AV_CODEC_ID_MPEGH_3D_AUDIO,  MKTAG('m', 'h', 'm', '1') }, /* MPEG-H 3D Audio bitstream */
+     { AV_CODEC_ID_NONE, 0 },
+ };
+diff --git a/libavformat/mov.c b/libavformat/mov.c
+index e7e29d7..b6a4139 100644
+--- a/libavformat/mov.c
++++ b/libavformat/mov.c
+@@ -52,6 +52,7 @@
+ #include "libavutil/timecode.h"
+ #include "libavutil/uuid.h"
+ #include "libavcodec/ac3tab.h"
++#include "libavcodec/av3a_parse.h"
+ #include "libavcodec/exif.h"
+ #include "libavcodec/flac.h"
+ #include "libavcodec/hevc/hevc.h"
+@@ -8834,6 +8835,80 @@ static int mov_read_dmlp(MOVContext *c, AVIOContext *pb, MOVAtom atom)
+     return 0;
+ }
+ 
++/* AV3A container syntax: Shuai Liu's OpenHarmony FFmpeg integration (2024). */
++static int mov_read_dca3(MOVContext *c, AVIOContext *pb, MOVAtom atom)
++{
++    uint8_t data[7 + AV_INPUT_BUFFER_PADDING_SIZE] = {0};
++    uint8_t config[AV3A_CONFIG_SIZE] = {0};
++    GetBitContext gb;
++    AV3AHeader hdr;
++    AVCodecParameters *par;
++    int ret, expected;
++    if (c->fc->nb_streams < 1)
++        return 0;
++    par = c->fc->streams[c->fc->nb_streams - 1]->codecpar;
++    if (par->codec_id != AV_CODEC_ID_AV3A || atom.size < 5 || atom.size > 7)
++        return AVERROR_INVALIDDATA;
++    ret = avio_read(pb, data, atom.size);
++    if (ret < 0)
++        return ret;
++    if (ret != atom.size)
++        return AVERROR_INVALIDDATA;
++    ret = init_get_bits8(&gb, data, atom.size);
++    if (ret < 0)
++        return ret;
++    config[0] = get_bits(&gb, 4);
++    config[1] = get_bits(&gb, 4);
++    config[2] = get_bits(&gb, 3);
++    skip_bits1(&gb);
++    config[3] = get_bits(&gb, 4);
++    expected = config[3] == 3 ? 5 : config[3] == 2 ? 7 : 6;
++    if (config[3] > 3 || atom.size < expected)
++        return AVERROR_INVALIDDATA;
++    if (config[3] == 0 || config[3] == 2) {
++        config[4] = get_bits(&gb, 7);
++        skip_bits1(&gb);
++    }
++    if (config[3] == 1 || config[3] == 2) {
++        config[5] = get_bits(&gb, 7);
++        skip_bits1(&gb);
++    }
++    if (config[3] == 3)
++        config[6] = get_bits(&gb, 4);
++    AV_WB16(config + 8, get_bits(&gb, 16));
++    config[7] = get_bits(&gb, 2);
++    ret = avpriv_av3a_parse_config(config, sizeof(config), &hdr);
++    if (ret < 0)
++        return ret;
++    ret = ff_alloc_extradata(par, sizeof(config));
++    if (ret < 0)
++        return ret;
++    memcpy(par->extradata, config, sizeof(config));
++    par->sample_rate = hdr.sample_rate;
++    par->bit_rate = hdr.bit_rate;
++    par->bits_per_raw_sample = hdr.bits_per_sample;
++    par->frame_size = AV3A_FRAME_SAMPLES;
++    /* Channel-based configurations have explicit speaker positions. */
++    av_channel_layout_uninit(&par->ch_layout);
++    if (config[3] == 0) {
++        static const uint64_t layouts[] = {
++            AV_CH_LAYOUT_MONO, AV_CH_LAYOUT_STEREO, AV_CH_LAYOUT_5POINT1_BACK,
++            AV_CH_LAYOUT_7POINT1, 0, 0, AV_CH_LAYOUT_4POINT0,
++            AV_CH_LAYOUT_5POINT1_BACK | AV_CH_TOP_SIDE_LEFT | AV_CH_TOP_SIDE_RIGHT,
++            AV_CH_LAYOUT_5POINT1_BACK | AV_CH_TOP_FRONT_LEFT | AV_CH_TOP_FRONT_RIGHT |
++                                      AV_CH_TOP_BACK_LEFT | AV_CH_TOP_BACK_RIGHT,
++            AV_CH_LAYOUT_7POINT1 | AV_CH_TOP_SIDE_LEFT | AV_CH_TOP_SIDE_RIGHT,
++            AV_CH_LAYOUT_7POINT1 | AV_CH_TOP_FRONT_LEFT | AV_CH_TOP_FRONT_RIGHT |
++                                  AV_CH_TOP_BACK_LEFT | AV_CH_TOP_BACK_RIGHT,
++        };
++        return av_channel_layout_from_mask(&par->ch_layout, layouts[config[4]]);
++    }
++    /* Object channels have no implied speaker positions. */
++    par->ch_layout.order = config[3] == 3 ? AV_CHANNEL_ORDER_AMBISONIC : AV_CHANNEL_ORDER_UNSPEC;
++    par->ch_layout.nb_channels = hdr.channels;
++    return 0;
++}
++
+ static int mov_read_dvcc_dvvc(MOVContext *c, AVIOContext *pb, MOVAtom atom)
+ {
+     AVStream *st;
+@@ -9843,6 +9918,7 @@ static const MOVParseTableEntry mov_default_parse_table[] = {
+ { MKTAG('h','f','o','v'), mov_read_hfov },
+ { MKTAG('d','O','p','s'), mov_read_dops },
+ { MKTAG('d','m','l','p'), mov_read_dmlp },
++{ MKTAG('d','c','a','3'), mov_read_dca3 },
+ { MKTAG('S','m','D','m'), mov_read_smdm },
+ { MKTAG('C','o','L','L'), mov_read_coll },
+ { MKTAG('v','p','c','C'), mov_read_vpcc },
+diff --git a/libavformat/movenc.c b/libavformat/movenc.c
+index 6f93eb3..3a51eaf 100644
+--- a/libavformat/movenc.c
++++ b/libavformat/movenc.c
+@@ -40,6 +40,7 @@
+ #include "apv.h"
+ #include "lcevc.h"
+ #include "libavcodec/ac3_parser_internal.h"
++#include "libavcodec/av3a_parse.h"
+ #include "libavcodec/dnxhddata.h"
+ #include "libavcodec/flac.h"
+ #include "libavcodec/get_bits.h"
+@@ -937,6 +938,42 @@ static int mov_write_dmlp_tag(AVFormatContext *s, AVIOContext *pb, MOVTrack *tra
+     return update_size(pb, pos);
+ }
+ 
++static int mov_write_dca3_tag(AVFormatContext *s, AVIOContext *pb, MOVTrack *track)
++{
++    const uint8_t *config = track->par->extradata;
++    uint8_t data[7] = {0};
++    PutBitContext bits;
++    AV3AHeader hdr;
++    int ret = avpriv_av3a_parse_config(config, track->par->extradata_size, &hdr);
++    if (ret < 0) {
++        av_log(s, AV_LOG_ERROR, "Missing or invalid AV3A configuration\n");
++        return ret;
++    }
++    init_put_bits(&bits, data, sizeof(data));
++    put_bits(&bits, 4, config[0]);
++    put_bits(&bits, 4, config[1]);
++    put_bits(&bits, 3, config[2]);
++    put_bits(&bits, 1, 0);
++    put_bits(&bits, 4, config[3]);
++    if (config[3] == 0 || config[3] == 2) {
++        put_bits(&bits, 7, config[4]);
++        put_bits(&bits, 1, 0);
++    }
++    if (config[3] == 1 || config[3] == 2) {
++        put_bits(&bits, 7, config[5]);
++        put_bits(&bits, 1, 0);
++    }
++    if (config[3] == 3)
++        put_bits(&bits, 4, config[6]);
++    put_bits(&bits, 16, AV_RB16(config + 8));
++    put_bits(&bits, 2, config[7]);
++    flush_put_bits(&bits);
++    avio_wb32(pb, 8 + put_bytes_output(&bits));
++    ffio_wfourcc(pb, "dca3");
++    avio_write(pb, data, put_bytes_output(&bits));
++    return 8 + put_bytes_output(&bits);
++}
++
+ static int mov_write_SA3D_tag(AVFormatContext *s, AVIOContext *pb, MOVTrack *track)
+ {
+     const AVDictionaryEntry *str = av_dict_get(track->st->metadata, "SA3D", NULL, 0);
+@@ -1518,6 +1555,8 @@ static int mov_write_audio_tag(AVFormatContext *s, AVIOContext *pb, MOVMuxContex
+         ret = mov_write_dops_tag(s, pb, track);
+     else if (track->par->codec_id == AV_CODEC_ID_TRUEHD)
+         ret = mov_write_dmlp_tag(s, pb, track);
++    else if (track->par->codec_id == AV_CODEC_ID_AV3A)
++        ret = mov_write_dca3_tag(s, pb, track);
+     else if (tag == MOV_MP4_IPCM_TAG || tag == MOV_MP4_FPCM_TAG) {
+         if (track->par->sample_rate > UINT16_MAX)
+             mov_write_srat_tag(pb, track);
+@@ -9268,6 +9307,7 @@ static const AVCodecTag codec_mp4_tags[] = {
+     { AV_CODEC_ID_DVD_SUBTITLE,    MKTAG('m', 'p', '4', 's') },
+     { AV_CODEC_ID_MOV_TEXT,        MKTAG('t', 'x', '3', 'g') },
+     { AV_CODEC_ID_BIN_DATA,        MKTAG('g', 'p', 'm', 'd') },
++    { AV_CODEC_ID_AV3A,            MKTAG('a', 'v', '3', 'a') },
+     { AV_CODEC_ID_MPEGH_3D_AUDIO,  MKTAG('m', 'h', 'm', '1') },
+     { AV_CODEC_ID_TTML,            MOV_MP4_TTML_TAG          },
+     { AV_CODEC_ID_TTML,            MOV_ISMV_TTML_TAG         },
+diff --git a/libavformat/mpegts.c b/libavformat/mpegts.c
+index dd88bd7..858c40b 100644
+--- a/libavformat/mpegts.c
++++ b/libavformat/mpegts.c
+@@ -912,6 +912,7 @@ static const StreamType REGD_types[] = {
+     { MKTAG('O', 'p', 'u', 's'), AVMEDIA_TYPE_AUDIO, AV_CODEC_ID_OPUS  },
+     { MKTAG('D', 'R', 'A', '1'), AVMEDIA_TYPE_AUDIO, AV_CODEC_ID_DRA   },
+     { MKTAG('a', 'v', '3', 'a'), AVMEDIA_TYPE_AUDIO, AV_CODEC_ID_AV3A  },
++    { MKTAG('A', 'V', 'S', 'A'), AVMEDIA_TYPE_AUDIO, AV_CODEC_ID_AV3A  },
+     { 0 },
+ };
+ 
+diff --git a/libavformat/mpegts.h b/libavformat/mpegts.h
+index 58ef248..ffb6a35 100644
+--- a/libavformat/mpegts.h
++++ b/libavformat/mpegts.h
+@@ -128,6 +128,7 @@
+ #define STREAM_TYPE_AUDIO_MPEG2     0x04
+ #define STREAM_TYPE_PRIVATE_SECTION 0x05
+ #define STREAM_TYPE_PRIVATE_DATA    0x06
++#define STREAM_TYPE_AUDIO_AV3A      0xd5
+ #define STREAM_TYPE_AUDIO_AAC       0x0f
+ #define STREAM_TYPE_AUDIO_AAC_LATM  0x11
+ #define STREAM_TYPE_VIDEO_MPEG4     0x10
+diff --git a/libavformat/mpegtsenc.c b/libavformat/mpegtsenc.c
+index 7f76883..3d5c60b 100644
+--- a/libavformat/mpegtsenc.c
++++ b/libavformat/mpegtsenc.c
+@@ -426,6 +426,9 @@ static int get_dvb_stream_type(AVFormatContext *s, AVStream *st)
+     case AV_CODEC_ID_OPUS:
+         stream_type = STREAM_TYPE_PRIVATE_DATA;
+         break;
++    case AV_CODEC_ID_AV3A:
++        stream_type = STREAM_TYPE_AUDIO_AV3A;
++        break;
+     case AV_CODEC_ID_TIMED_ID3:
+         stream_type = STREAM_TYPE_METADATA;
+         break;
+@@ -576,6 +579,8 @@ static int mpegts_write_pmt(AVFormatContext *s, MpegTSService *service)
+                 put_registration_descriptor(&q, MKTAG('A', 'C', '-', '3'));
+             if (codec_id == AV_CODEC_ID_EAC3)
+                 put_registration_descriptor(&q, MKTAG('E', 'A', 'C', '3'));
++            if (codec_id == AV_CODEC_ID_AV3A)
++                put_registration_descriptor(&q, MKTAG('A', 'V', 'S', 'A'));
+             if (ts->flags & MPEGTS_FLAG_SYSTEM_B) {
+                 if (codec_id == AV_CODEC_ID_AC3) {
+                     DVBAC3Descriptor *dvb_ac3_desc = ts_st->dvb_ac3_desc;
+diff --git a/libavformat/rawenc.c b/libavformat/rawenc.c
+index cf298d2..a52d430 100644
+--- a/libavformat/rawenc.c
++++ b/libavformat/rawenc.c
+@@ -117,6 +117,21 @@ const FFOutputFormat ff_aptx_hd_muxer = {
+ };
+ #endif
+ 
++#if CONFIG_AV3A_MUXER
++const FFOutputFormat ff_av3a_muxer = {
++    .p.name            = "av3a",
++    .p.long_name       = NULL_IF_CONFIG_SMALL("raw AV3A (Audio Vivid)"),
++    .p.extensions      = "av3a",
++    .p.audio_codec     = AV_CODEC_ID_AV3A,
++    .p.video_codec     = AV_CODEC_ID_NONE,
++    .p.subtitle_codec  = AV_CODEC_ID_NONE,
++    .flags_internal    = FF_OFMT_FLAG_MAX_ONE_OF_EACH |
++                         FF_OFMT_FLAG_ONLY_DEFAULT_CODECS,
++    .write_packet      = ff_raw_write_packet,
++    .p.flags           = AVFMT_NOTIMESTAMPS,
++};
++#endif
++
+ #if CONFIG_AVS2_MUXER
+ const FFOutputFormat ff_avs2_muxer = {
+     .p.name            = "avs2",

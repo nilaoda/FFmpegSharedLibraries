@@ -8,6 +8,7 @@
 #include "libavcodec/avcodec.h"
 #include "libavformat/avformat.h"
 #include "libavutil/mem.h"
+#include "libavutil/sha.h"
 
 #define FRAME_SIZE 1024
 #define HEADER_SIZE 9
@@ -187,11 +188,9 @@ static int verify_raw(const uint8_t *frames, int prefix, int force_format)
     AV3A_CHECK(avformat_find_stream_info(context, NULL) >= 0);
     AV3A_CHECK(context->nb_streams == 1 && context->streams[0]->codecpar->codec_id == AV_CODEC_ID_AV3A);
     AV3A_CHECK(context->streams[0]->codecpar->sample_rate == 48000 && context->streams[0]->codecpar->ch_layout.nb_channels == 10);
-#ifdef AV3A_VERIFY_DCA3
     /* 裸流同步后仍须保留 MP4 配置，码率 384 kbit/s 使用大端序。 */
     AV3A_CHECK(context->streams[0]->codecpar->extradata_size == 10);
     AV3A_CHECK(context->streams[0]->codecpar->extradata[8] == 1 && context->streams[0]->codecpar->extradata[9] == 0x80);
-#endif
     AVPacket *packet = av_packet_alloc();
     int count = 0;
     AV3A_CHECK(packet);
@@ -208,6 +207,177 @@ static int verify_raw(const uint8_t *frames, int prefix, int force_format)
     av_freep(&io->buffer);
     avio_context_free(&io);
     av_free(data);
+    return 0;
+}
+
+static int64_t av3a_seek_memory(void *opaque, int64_t offset, int whence)
+{
+    AV3AMemoryInput *input = opaque;
+    int64_t position;
+    if (whence == AVSEEK_SIZE) return input->size;
+    whence &= ~AVSEEK_FORCE;
+    position = whence == SEEK_SET ? offset : whence == SEEK_CUR ? input->offset + offset :
+               whence == SEEK_END ? input->size + offset : -1;
+    if (position < 0 || position > input->size) return AVERROR(EINVAL);
+    input->offset = position;
+    return position;
+}
+
+static void av3a_hash_packet(struct AVSHA *hash, const AVPacket *packet)
+{
+    uint8_t size[] = {packet->size >> 24, packet->size >> 16, packet->size >> 8, packet->size};
+    av_sha_update(hash, size, sizeof(size));
+    av_sha_update(hash, packet->data, packet->size);
+}
+
+/* Verify packet boundaries, payloads and codec configuration without decoding. */
+static int verify_av3a_remux(AVFormatContext *input, const char *format)
+{
+    AVFormatContext *output = NULL, *reopened = NULL;
+    AVPacket *packet = av_packet_alloc();
+    struct AVSHA *hash = av_sha_alloc();
+    uint8_t expected[32], actual[32], config[10], *data = NULL;
+    int stream = -1, count = 0, retained = 0, ret, size;
+    const AVCodecParameters *par;
+    AVIOContext *io;
+    AV3A_CHECK(packet && hash);
+    for (unsigned i = 0; i < input->nb_streams; i++)
+        if (input->streams[i]->codecpar->codec_id == AV_CODEC_ID_AV3A) { stream = i; break; }
+    AV3A_CHECK(stream >= 0);
+    par = input->streams[stream]->codecpar;
+    AV3A_CHECK(par->extradata_size == 10);
+    memcpy(config, par->extradata, sizeof(config));
+    AV3A_CHECK(avformat_alloc_output_context2(&output, NULL, format, NULL) >= 0 && output);
+    AVStream *out_stream = avformat_new_stream(output, NULL);
+    AV3A_CHECK(out_stream && avcodec_parameters_copy(out_stream->codecpar, par) >= 0);
+    out_stream->codecpar->codec_tag = 0;
+    out_stream->time_base = input->streams[stream]->time_base;
+    AV3A_CHECK(avio_open_dyn_buf(&output->pb) >= 0);
+    AV3A_CHECK(avformat_write_header(output, NULL) >= 0);
+    av_sha_init(hash, 256);
+    while ((ret = av_read_frame(input, packet)) >= 0) {
+        if (packet->stream_index == stream) {
+            av3a_hash_packet(hash, packet);
+            if (packet->pts == AV_NOPTS_VALUE)
+                packet->pts = av_rescale_q((int64_t)count * 1024, (AVRational){1, par->sample_rate}, input->streams[stream]->time_base);
+            if (packet->dts == AV_NOPTS_VALUE) packet->dts = packet->pts;
+            av_packet_rescale_ts(packet, input->streams[stream]->time_base, out_stream->time_base);
+            packet->stream_index = 0;
+            packet->pos = -1;
+            AV3A_CHECK(av_interleaved_write_frame(output, packet) >= 0);
+            count++;
+        }
+        av_packet_unref(packet);
+    }
+    AV3A_CHECK(ret == AVERROR_EOF && count > 0);
+    av_sha_final(hash, expected);
+    AV3A_CHECK(av_write_trailer(output) >= 0);
+    size = avio_close_dyn_buf(output->pb, &data);
+    output->pb = NULL;
+    AV3A_CHECK(size > 0);
+    avformat_free_context(output);
+    AV3AMemoryInput memory = {data, size, 0};
+    io = avio_alloc_context(av_malloc(4096), 4096, 0, &memory, av3a_read_memory, NULL, av3a_seek_memory);
+    AV3A_CHECK(io);
+    reopened = avformat_alloc_context();
+    AV3A_CHECK(reopened);
+    reopened->pb = io;
+    AV3A_CHECK(avformat_open_input(&reopened, NULL, av_find_input_format(!strcmp(format, "mp4") ? "mov" : format), NULL) >= 0);
+    AV3A_CHECK(avformat_find_stream_info(reopened, NULL) >= 0 && reopened->nb_streams == 1);
+    AVCodecParameters *roundtrip = reopened->streams[0]->codecpar;
+    AV3A_CHECK(roundtrip->codec_id == AV_CODEC_ID_AV3A && roundtrip->sample_rate == par->sample_rate);
+    AV3A_CHECK(roundtrip->ch_layout.nb_channels == par->ch_layout.nb_channels);
+    AV3A_CHECK(roundtrip->extradata_size == sizeof(config) && !memcmp(roundtrip->extradata, config, sizeof(config)));
+    av_sha_init(hash, 256);
+    while ((ret = av_read_frame(reopened, packet)) >= 0) {
+        av3a_hash_packet(hash, packet);
+        retained++;
+        av_packet_unref(packet);
+    }
+    av_sha_final(hash, actual);
+    AV3A_CHECK(ret == AVERROR_EOF && retained == count && !memcmp(expected, actual, sizeof(expected)));
+    printf("  AV3A %s roundtrip: %d packets, configuration and SHA-256 match\n", format, count);
+    av_packet_free(&packet);
+    av_free(hash);
+    avformat_close_input(&reopened);
+    av_freep(&io->buffer);
+    avio_context_free(&io);
+    av_free(data);
+    return 0;
+}
+
+static int verify_av3a_invalid_config(void)
+{
+    for (int test = 0; test < 2; test++) {
+        AVFormatContext *output = NULL;
+        AVPacket *packet = av_packet_alloc();
+        uint8_t *data = NULL;
+        int ret;
+        AV3A_CHECK(packet && avformat_alloc_output_context2(&output, NULL, "mp4", NULL) >= 0 && output);
+        AVStream *stream = avformat_new_stream(output, NULL);
+        AV3A_CHECK(stream);
+        stream->time_base = (AVRational){1, 48000};
+        stream->codecpar->codec_type = AVMEDIA_TYPE_AUDIO;
+        stream->codecpar->codec_id = AV_CODEC_ID_AV3A;
+        stream->codecpar->sample_rate = 48000;
+        stream->codecpar->frame_size = 1024;
+        stream->codecpar->ch_layout.nb_channels = 10;
+        if (test) {
+            stream->codecpar->extradata = av_mallocz(9 + AV_INPUT_BUFFER_PADDING_SIZE);
+            AV3A_CHECK(stream->codecpar->extradata);
+            stream->codecpar->extradata_size = 9; /* Truncated configuration. */
+        }
+        AV3A_CHECK(avio_open_dyn_buf(&output->pb) >= 0);
+        ret = avformat_write_header(output, NULL);
+        if (ret >= 0) {
+            AV3A_CHECK(av_new_packet(packet, FRAME_SIZE) >= 0);
+            make_frame(packet->data);
+            packet->pts = packet->dts = 0;
+            packet->duration = 1024;
+            AV3A_CHECK(av_interleaved_write_frame(output, packet) >= 0);
+            ret = av_write_trailer(output);
+        }
+        AV3A_CHECK(ret < 0);
+        avio_close_dyn_buf(output->pb, &data);
+        output->pb = NULL;
+        av_free(data);
+        avformat_free_context(output);
+        av_packet_free(&packet);
+    }
+    return 0;
+}
+
+static int verify_av3a_muxers(const uint8_t *frames)
+{
+    const char *formats[] = {"mp4", "mpegts", "av3a"};
+    const AVOutputFormat *mp4 = av_guess_format("mp4", NULL, NULL);
+    AV3A_CHECK(mp4 && avformat_query_codec(mp4, AV_CODEC_ID_AV3A, 0) > 0);
+    for (unsigned i = 0; i < sizeof(formats) / sizeof(formats[0]); i++) {
+        AV3AMemoryInput memory = {frames, 4 * FRAME_SIZE, 0};
+        AVIOContext *io = avio_alloc_context(av_malloc(4096), 4096, 0, &memory, av3a_read_memory, NULL, NULL);
+        AVFormatContext *input = avformat_alloc_context();
+        AV3A_CHECK(io && input);
+        input->pb = io;
+        AV3A_CHECK(avformat_open_input(&input, NULL, av_find_input_format("av3a"), NULL) >= 0);
+        AV3A_CHECK(avformat_find_stream_info(input, NULL) >= 0);
+        AV3A_CHECK(!verify_av3a_remux(input, formats[i]));
+        avformat_close_input(&input);
+        av_freep(&io->buffer);
+        avio_context_free(&io);
+    }
+    return 0;
+}
+
+static int verify_av3a_file(const char *path)
+{
+    const char *formats[] = {"mp4", "mpegts", "av3a"};
+    for (unsigned i = 0; i < sizeof(formats) / sizeof(formats[0]); i++) {
+        AVFormatContext *input = NULL;
+        AV3A_CHECK(avformat_open_input(&input, path, NULL, NULL) >= 0);
+        AV3A_CHECK(avformat_find_stream_info(input, NULL) >= 0);
+        AV3A_CHECK(!verify_av3a_remux(input, formats[i]));
+        avformat_close_input(&input);
+    }
     return 0;
 }
 
@@ -244,6 +414,18 @@ static int verify_av3a(void)
             AV3A_CHECK(!verify_parser(varied, 4 * sizes[test], 7, sizes[test], rates[test]));
             AV3A_CHECK(!verify_parser(varied, 4 * sizes[test], 1024, sizes[test], rates[test]));
         }
+    }
+    AV3A_CHECK(!verify_av3a_invalid_config());
+    AV3A_CHECK(!verify_av3a_muxers(frames));
+    {
+        uint8_t ambisonic[sizeof(frames)];
+        memcpy(ambisonic, frames, sizeof(frames));
+        for (int i = 0; i < 4; i++) {
+            /* AATF profile 2, second-order HOA, 48 kHz, 384 kbit/s. */
+            ambisonic[i * FRAME_SIZE + 2] = 0x14;
+            ambisonic[i * FRAME_SIZE + 5] = 0x99;
+        }
+        AV3A_CHECK(!verify_av3a_muxers(ambisonic));
     }
     AV3A_CHECK(!verify_corruption(frames));
     AV3A_CHECK(!verify_ts(frames));
