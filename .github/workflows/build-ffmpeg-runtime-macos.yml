@@ -16,6 +16,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install subtitle build tools
+        run: brew install meson ninja
+
       - name: Build runtime
         run: |
           chmod +x tools/build_ffmpeg_runtime_macos.sh
@@ -27,7 +30,7 @@ jobs:
       - name: Verify packaged runtime
         run: |
           ROOT="$RUNNER_TEMP/$WORK_ROOT_DIR"
-          clang -O2 -Wall -Wextra -I"$ROOT/install/include" tools/verify_runtime.c \
+          clang -O2 -Wall -Wextra -I"$ROOT/install/include" -I"$ROOT/subtitle-install/include" tools/verify_runtime.c \
             "$ROOT/package/libavformat.63.dylib" \
             "$ROOT/package/libavcodec.63.dylib" \
             "$ROOT/package/libavutil.61.dylib" \
@@ -35,6 +38,7 @@ jobs:
             "$ROOT/package/libavfilter.12.dylib" \
             "$ROOT/package/libswscale.10.dylib" \
             "$ROOT/package/libswresample.7.dylib" \
+            "$ROOT/package/libass.9.dylib" \
             -o "$ROOT/package/verify_runtime"
           "$ROOT/package/verify_runtime"
 

@@ -1,0 +1,16 @@
+--- a/libass/meson.build
++++ b/libass/meson.build
+@@ -114,0 +115,2 @@
++elif host_system == 'darwin'
++    kwargs = {'link_args': ['-Wl,-exported_symbols_list,' + meson.current_source_dir() / 'libass.exports']}
+@@ -116 +118 @@
+-    kwargs = {}
++    kwargs = {'link_args': ['-Wl,--version-script=' + meson.current_source_dir() / 'libass.map']}
+--- a/meson.build
++++ b/meson.build
+@@ -414,5 +413,0 @@
+-if default_library != 'static' and host_system != 'windows'
+-    warning(
+-        'this build does not properly support symbol visibility and the resulting shared lib is not suitable for distribution!',
+-    )
+-endif

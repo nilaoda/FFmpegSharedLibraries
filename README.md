@@ -1,6 +1,6 @@
 # FFmpegSharedLibraries
 
-GitHub Actions workflows for building FFmpeg shared-library runtimes with `libuavs3d` enabled and `libdavs2` (from `davs2-10bit`) enabled in GPL builds.
+GitHub Actions workflows for building FFmpeg shared-library runtimes with subtitle decoding and libass rendering, `libuavs3d` enabled, and `libdavs2` (from `davs2-10bit`) enabled in GPL builds.
 
 ## Outputs
 
@@ -8,11 +8,12 @@ GitHub Actions workflows for building FFmpeg shared-library runtimes with `libua
 - `windows-latest`: win64 `.dll`
 - `ubuntu-latest`: linux x64 `.so`
 
-Each workflow builds FFmpeg shared libraries only.
+Each runtime contains seven FFmpeg shared libraries and one libass shared library (ABI 9).
 
 - `libuavs3d` is always built from source as a static dependency and linked into FFmpeg.
 - `libdavs2` (`davs2-10bit`) is built from source and linked statically when `license_flavor=gpl`.
 - Runtime artifacts do not include separate `libuavs3d`/`libdavs2` dynamic libraries.
+- libass statically includes FreeType, HarfBuzz, FriBidi and libunibreak. Linux also statically includes Fontconfig and Expat. These dependencies do not add separate runtime libraries.
 - The macOS runtime enables VideoToolbox hardware decoding.
 - The Windows runtime enables D3D11VA and DXVA2 hardware decoding through Windows system APIs without additional runtime DLLs.
 
@@ -69,9 +70,48 @@ four jobs to limit peak compiler memory; set `BUILD_JOBS` to override it.
 | swresample | 7 |
 
 `libpostproc` was removed upstream and is no longer packaged. These libraries
-require FFmpeg 9 bindings and cannot replace the current TSCutter 7.x runtime.
+require FFmpeg 9 bindings; applications using FFmpeg 7 bindings must migrate
+before adopting this runtime.
 macOS packaging rewrites dependencies to `@loader_path` and renews the ad-hoc
 signature after rewriting, so ARM64 libraries can load from the flat package.
+
+## Subtitle Preview Support
+
+FFmpeg provides text subtitle decoding (including MP4 mov_text, SRT, SSA/ASS and
+WebVTT) and bitmap subtitle decoding (PGS, DVB and DVD), plus CEA-608 captions.
+The `ass` and `subtitles` filters are enabled.
+
+Applications can call the bundled libass directly to render SSA/ASS as transparent
+bitmap overlays, including styling, animation and complex text shaping. Decoded
+text subtitles can be passed to libass for the same preview path. PGS/DVB/DVD
+subtitles already decode to bitmaps and should be composited by the application.
+Container support depends on the subtitle codec carried by each track.
+
+System fonts are resolved through CoreText on macOS, DirectWrite/GDI on Windows,
+and Fontconfig on Linux. Linux hosts need a font installation and Fontconfig
+configuration (normally `/etc/fonts`). No font files are bundled. Applications
+can supply MKV font attachments through `ass_add_font` before rendering.
+
+`tools/build_subtitle_runtime.sh` builds pinned, SHA-256-checked sources. The local
+[`libass Meson patch`](./patches/libass/0001-meson-shared-library-exports.patch)
+limits shared-library exports to upstream's `libass.sym` public API list, matching
+its Autotools build. The runtime manifest records dependency versions.
+
+## Runtime Loading and Diagnostics
+
+Load libraries from one runtime package and directory. Load libass before
+libavfilter, since the subtitle-enabled libavfilter depends on it. The libass
+filenames are `libass.9.dylib`, `libass.so.9` and `libass-9.dll` on macOS, Linux
+and Windows respectively.
+
+Before using native structures, applications must check FFmpeg ABI majors against
+the table above. Subtitle rendering requires libass API version 0.17.4
+(`ass_library_version() >= 0x01704000`, within API major version 0) and the entry
+points used by the application. A matching filename alone is insufficient.
+Report missing files, incompatible versions, missing entry points and loader
+errors with the failing file's path, and ask the user to restore the complete
+matching runtime package. On Windows, a load error can identify the parent DLL
+when one of its dependencies is missing; check for `libass-9.dll` explicitly.
 
 ## Verification
 
@@ -80,6 +120,8 @@ runtime before uploading it. This checks loading, ABI majors and registration of
 `cavs`, `libdra`, `libdavs2` and `libuavs3d` in the GPL builds, plus AV3A probing
 and parsing without an audio decoder. AV3A MP4, TS and raw-stream round trips
 also check codec configuration, packet boundaries and SHA-256 payload hashes.
+Subtitle checks cover decoder/filter availability, actual mov_text decoding, and
+libass output pixels with system fonts, animation, Unicode wrapping and seeking.
 
 The Windows build first checks static C++/pthread linkage with both GCC drivers
 using `tools/verify_windows_linkage.cpp`, including a thread and an exception.
@@ -94,14 +136,16 @@ macOS build:
 
 ```sh
 ROOT=/absolute/path/to/work-root
-clang -O2 -Wall -Wextra -I"$ROOT/install/include" tools/verify_runtime.c \
+clang -O2 -Wall -Wextra -I"$ROOT/install/include" \
+  -I"$ROOT/subtitle-install/include" tools/verify_runtime.c \
   "$ROOT/package/libavformat.63.dylib" \
   "$ROOT/package/libavcodec.63.dylib" \
   "$ROOT/package/libavutil.61.dylib" \
   "$ROOT/package/libavdevice.63.dylib" \
   "$ROOT/package/libavfilter.12.dylib" \
   "$ROOT/package/libswscale.10.dylib" \
-  "$ROOT/package/libswresample.7.dylib" -o "$ROOT/package/verify_runtime"
+  "$ROOT/package/libswresample.7.dylib" \
+  "$ROOT/package/libass.9.dylib" -o "$ROOT/package/verify_runtime"
 "$ROOT/package/verify_runtime" /path/to/AVS2.ts
 "$ROOT/package/verify_runtime" /path/to/DRA.ts dra
 "$ROOT/package/verify_runtime" /path/to/raw.cavs cavsvideo
@@ -125,6 +169,13 @@ with the repository or uploaded by the workflows.
 - davs2-10bit: https://github.com/xatabhk/davs2-10bit
 - AV3A demux/mux, AATF tables and headers: [OpenHarmony third_party_ffmpeg](https://github.com/openharmony/third_party_ffmpeg) (original container implementation: [ac883016](https://github.com/openharmony/third_party_ffmpeg/commit/ac883016d94bb95354e2824a501702f64c9ad945), Shuai Liu, 2024-11-01)
 - ffmpeg_cavs_dra patch source: https://github.com/maliwen2015/ffmpeg_cavs_dra
+- libass 0.17.4: https://github.com/libass/libass
+- FreeType 2.13.3: https://github.com/freetype/freetype
+- HarfBuzz 10.2.0: https://github.com/harfbuzz/harfbuzz
+- FriBidi 1.0.16: https://github.com/fribidi/fribidi
+- libunibreak 6.1: https://github.com/adah1972/libunibreak
+- Fontconfig 2.16.0 (Linux): https://github.com/fontconfig/fontconfig
+- Expat 2.6.4 (Linux): https://github.com/libexpat/libexpat
 
 ## Workflows
 

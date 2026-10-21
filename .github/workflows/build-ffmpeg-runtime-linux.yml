@@ -25,10 +25,16 @@ jobs:
             curl \
             git \
             nasm \
+            python3-venv \
+            gperf \
+            fonts-dejavu-core \
             ninja-build \
             patchelf \
             pkg-config \
             zip
+          python3 -m venv "$RUNNER_TEMP/subtitle-build-tools"
+          "$RUNNER_TEMP/subtitle-build-tools/bin/pip" install meson==1.12.1
+          echo "$RUNNER_TEMP/subtitle-build-tools/bin" >> "$GITHUB_PATH"
 
       - name: Build runtime
         run: |
@@ -41,7 +47,7 @@ jobs:
       - name: Verify packaged runtime
         run: |
           ROOT="$RUNNER_TEMP/$WORK_ROOT_DIR"
-          gcc -O2 -Wall -Wextra -I"$ROOT/install/include" tools/verify_runtime.c \
+          gcc -O2 -Wall -Wextra -I"$ROOT/install/include" -I"$ROOT/subtitle-install/include" tools/verify_runtime.c \
             "$ROOT/package/libavformat.so.63" \
             "$ROOT/package/libavcodec.so.63" \
             "$ROOT/package/libavutil.so.61" \
@@ -49,6 +55,7 @@ jobs:
             "$ROOT/package/libavfilter.so.12" \
             "$ROOT/package/libswscale.so.10" \
             "$ROOT/package/libswresample.so.7" \
+            "$ROOT/package/libass.so.9" \
             -Wl,-rpath,'$ORIGIN' -Wl,-rpath-link,"$ROOT/package" \
             -o "$ROOT/package/verify_runtime"
           "$ROOT/package/verify_runtime"

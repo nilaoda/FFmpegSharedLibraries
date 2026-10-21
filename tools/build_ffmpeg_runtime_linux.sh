@@ -43,6 +43,7 @@ DAVS2_DPB_FIX_PATCH_PATH="$REPO_ROOT/patches/davs2-10bit/0003-fix-dpb-stale-ref-
 FFMPEG_RUNTIME_PATCH_PATH="$REPO_ROOT/patches/ffmpeg/0001-avs-dra-runtime.patch"
 FFMPEG_AV3A_PATCH_PATH="$REPO_ROOT/patches/ffmpeg/0002-av3a-demux-probing.patch"
 FFMPEG_AV3A_CONTAINER_PATCH_PATH="$REPO_ROOT/patches/ffmpeg/0003-av3a-container-remux.patch"
+SUBTITLE_INSTALL_ROOT="$WORK_ROOT/subtitle-install"
 INSTALL_ROOT="$WORK_ROOT/install"
 PACKAGE_ROOT="$WORK_ROOT/package"
 RUNTIME_ROOT="$PACKAGE_ROOT"
@@ -74,6 +75,7 @@ LIBRARY_NAMES=(
   libavformat.so.63
   libavfilter.so.12
   libavdevice.so.63
+  libass.so.9
 )
 
 SYSTEM_SO_PATTERNS=(
@@ -233,7 +235,10 @@ EOF
   fi
 fi
 
-PKG_CONFIG_PATH_ENTRIES=("$UAVS3D_INSTALL_ROOT/lib/pkgconfig")
+# 构建可独立调用的 libass，字体和文字排版依赖静态链接。
+PKG_CONFIG_BIN="$PKG_CONFIG_BIN" bash "$SCRIPT_DIR/build_subtitle_runtime.sh" linux "$WORK_ROOT" "$CPU_COUNT"
+
+PKG_CONFIG_PATH_ENTRIES=("$UAVS3D_INSTALL_ROOT/lib/pkgconfig" "$SUBTITLE_INSTALL_ROOT/lib/pkgconfig")
 CPPFLAGS_ENTRIES=("-I$UAVS3D_INSTALL_ROOT/include")
 
 if [[ "$ENABLE_LIBDAVS2" == true ]]; then
@@ -262,6 +267,8 @@ CONFIGURE_FLAGS=(
   --disable-debug
   --enable-pic
   --disable-autodetect
+  --enable-libass
+  --enable-filter=ass,subtitles
   --disable-ffplay
   --disable-network
   --disable-indevs
@@ -297,6 +304,9 @@ popd >/dev/null
 
 for library_name in "${LIBRARY_NAMES[@]}"; do
   source_path="$INSTALL_ROOT/lib/$library_name"
+  if [[ "$library_name" == libass.so.9 ]]; then
+    source_path="$SUBTITLE_INSTALL_ROOT/lib/$library_name"
+  fi
   if [[ ! -f "$source_path" ]]; then
     echo "Missing expected FFmpeg runtime library: $library_name" >&2
     exit 1
@@ -339,6 +349,7 @@ is_system_so() {
     echo "libdavs2 revision: $DAVS2_GIT_REF"
     echo "libdavs2 bit depth: 10"
   fi
+  cat "$SUBTITLE_INSTALL_ROOT/versions.txt"
   echo "Built on: $(date -u +"%Y-%m-%dT%H:%M:%SZ")"
   echo
   echo "Configure flags:"

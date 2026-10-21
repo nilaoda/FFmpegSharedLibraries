@@ -13,6 +13,7 @@
 #include "libswresample/swresample.h"
 #include "libswscale/swscale.h"
 #include "verify_av3a.h"
+#include "verify_subtitles.h"
 
 typedef struct SeenPacket {
     int64_t pos;
@@ -129,14 +130,24 @@ int main(int argc, char **argv)
     if (avcodec_version() >> 16 != 63 || avformat_version() >> 16 != 63 ||
         avutil_version() >> 16 != 61 || avdevice_version() >> 16 != 63 ||
         avfilter_version() >> 16 != 12 || swscale_version() >> 16 != 10 ||
-        swresample_version() >> 16 != 7)
+        swresample_version() >> 16 != 7) {
+        fprintf(stderr, "Incompatible FFmpeg ABI (expected/loaded): "
+                "avutil 61/%u, avcodec 63/%u, avformat 63/%u, avdevice 63/%u, "
+                "avfilter 12/%u, swscale 10/%u, swresample 7/%u. "
+                "Restore the complete matching runtime package.\n",
+                avutil_version() >> 16, avcodec_version() >> 16, avformat_version() >> 16,
+                avdevice_version() >> 16, avfilter_version() >> 16, swscale_version() >> 16,
+                swresample_version() >> 16);
         return 1;
+    }
     for (unsigned i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
         if (!avcodec_find_decoder_by_name(names[i])) {
             fprintf(stderr, "Missing decoder: %s\n", names[i]);
             return 1;
         }
     }
+    if (verify_subtitles())
+        return 1;
     if (verify_av3a())
         return 1;
     if (argc > 2 && !strcmp(argv[2], "av3a"))
