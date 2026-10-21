@@ -107,10 +107,13 @@ Libs: -L\${libdir} -lunibreak
 Cflags: -I\${includedir}
 PC
 
-SUBTITLE_PROVIDER_FLAGS=(-Dfontconfig=disabled -Dcoretext=disabled -Ddirectwrite=disabled)
+SUBTITLE_PLATFORM_FLAGS=(-Dfontconfig=disabled -Dcoretext=disabled -Ddirectwrite=disabled)
 case "$SUBTITLE_PLATFORM" in
-  macos) SUBTITLE_PROVIDER_FLAGS=(-Dfontconfig=disabled -Dcoretext=enabled -Ddirectwrite=disabled) ;;
-  windows) SUBTITLE_PROVIDER_FLAGS=(-Dfontconfig=disabled -Dcoretext=disabled -Ddirectwrite=enabled) ;;
+  macos) SUBTITLE_PLATFORM_FLAGS=(-Dfontconfig=disabled -Dcoretext=enabled -Ddirectwrite=disabled) ;;
+  windows)
+    # 依赖中的位计数等辅助函数也必须静态链接，避免引入 libgcc_s_seh-1.dll。
+    SUBTITLE_PLATFORM_FLAGS=(-Dfontconfig=disabled -Dcoretext=disabled -Ddirectwrite=enabled -Dc_link_args=-static-libgcc)
+    ;;
   linux)
     subtitle_source expat-2.6.4.tar.xz \
       https://github.com/libexpat/libexpat/releases/download/R_2_6_4/expat-2.6.4.tar.xz \
@@ -135,7 +138,7 @@ case "$SUBTITLE_PLATFORM" in
     cp -R "$SUBTITLE_BUILD_ROOT/fontconfig-stage/usr/include/fontconfig" "$SUBTITLE_INSTALL_ROOT/include/"
     awk -v prefix="$SUBTITLE_INSTALL_ROOT" '/^prefix=/{print "prefix=" prefix; next} {print}' \
       "$SUBTITLE_BUILD_ROOT/fontconfig-stage/usr/lib/pkgconfig/fontconfig.pc" > "$SUBTITLE_INSTALL_ROOT/lib/pkgconfig/fontconfig.pc"
-    SUBTITLE_PROVIDER_FLAGS=(-Dfontconfig=enabled -Dcoretext=disabled -Ddirectwrite=disabled)
+    SUBTITLE_PLATFORM_FLAGS=(-Dfontconfig=enabled -Dcoretext=disabled -Ddirectwrite=disabled)
     ;;
 esac
 
@@ -152,7 +155,7 @@ awk '{print "_" $0}' "$SUBTITLE_SOURCE_ROOT/libass-0.17.4/libass/libass.sym" \
 
 meson setup "$SUBTITLE_BUILD_ROOT/libass" "$SUBTITLE_SOURCE_ROOT/libass-0.17.4" \
   "${SUBTITLE_MESON_FLAGS[@]}" --default-library=shared --prefix="$SUBTITLE_INSTALL_ROOT" -Dprefer_static=true \
-  "${SUBTITLE_PROVIDER_FLAGS[@]}" -Dlibunibreak=enabled -Dasm=enabled -Dtest=disabled -Dcompare=disabled \
+  "${SUBTITLE_PLATFORM_FLAGS[@]}" -Dlibunibreak=enabled -Dasm=enabled -Dtest=disabled -Dcompare=disabled \
   -Dprofile=disabled -Dcheckasm=disabled -Dfuzz=disabled
 meson compile -C "$SUBTITLE_BUILD_ROOT/libass" -j "$SUBTITLE_JOBS"
 meson install -C "$SUBTITLE_BUILD_ROOT/libass"

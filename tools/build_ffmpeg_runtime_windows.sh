@@ -285,6 +285,17 @@ fi
 # 构建可独立调用的 libass，字体和文字排版依赖静态链接。
 PKG_CONFIG_BIN="$PKG_CONFIG_BIN" bash "$SCRIPT_DIR/build_subtitle_runtime.sh" windows "$WORK_ROOT" "$CPU_COUNT"
 
+# 尽早检查新生成的 libass，避免完成整个 FFmpeg 构建后才发现额外运行库依赖。
+subtitle_dependencies="$(dll_dependencies "$SUBTITLE_INSTALL_ROOT/bin/libass-9.dll")"
+while IFS= read -r dependency; do
+  [[ -n "$dependency" ]] || continue
+  dependency_upper="$(printf '%s' "$dependency" | tr '[:lower:]' '[:upper:]')"
+  if ! is_system_dll "$dependency_upper"; then
+    echo "Unexpected external dependency in libass-9.dll: $dependency" >&2
+    exit 1
+  fi
+done <<< "$subtitle_dependencies"
+
 PKG_CONFIG_PATH_ENTRIES=("$UAVS3D_INSTALL_ROOT/lib/pkgconfig" "$SUBTITLE_INSTALL_ROOT/lib/pkgconfig")
 CPPFLAGS_ENTRIES=("-I$UAVS3D_INSTALL_ROOT/include")
 
@@ -432,7 +443,7 @@ for dll in "$RUNTIME_ROOT"/*.dll; do
     fi
 
     if ! is_system_dll "$dependency_upper"; then
-      objdump -p "$dll" >&2
+      dll_dependencies "$dll" >&2
       echo "Unexpected external dependency in $(basename "$dll"): $dependency" >&2
       exit 1
     fi
