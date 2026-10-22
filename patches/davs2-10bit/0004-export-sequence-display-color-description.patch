@@ -1,0 +1,126 @@
+diff --git a/source/common/header.cc b/source/common/header.cc
+--- a/source/common/header.cc
++++ b/source/common/header.cc
+@@ -275,6 +275,69 @@
+     return 0;
+ }
+ 
++static
++int parse_extension_header(davs2_mgr_t *mgr, davs2_seq_t *seq, davs2_bs_t *bs)
++{
++    int extension_id;
++    davs2_bs_t extension = *bs;
++    const uint8_t *next;
++
++    if (seq == NULL || seq->valid_flag == 0) {
++        return 0;
++    }
++
++    extension.i_bit_pos += 32;
++    next = find_start_code(extension.p_stream + (extension.i_bit_pos >> 3),
++                           bs_left_bytes(&extension));
++    if (next != NULL) {
++        extension.i_stream = (int)(next - extension.p_stream);
++    }
++    bs->i_bit_pos = extension.i_bit_pos;
++    if (bs_left_bytes(&extension) < 1) {
++        return -1;
++    }
++    extension_id = u_v(&extension, 4, "extension_start_code_identifier");
++
++    if (extension_id != SEQUENCE_DISPLAY_EXTENSION_ID) {
++        return 0;
++    }
++
++    if (bs_left_bytes(&extension) < 2) {
++        return -1;
++    }
++
++    seq->head.sequence_display_extension = 1;
++    seq->head.video_format = u_v(&extension, 3, "video_format");
++    seq->head.sample_range = u_flag(&extension, "sample_range");
++    seq->head.colour_description = u_flag(&extension, "colour_description");
++
++    if (seq->head.colour_description) {
++        if (bs_left_bytes(&extension) < 4) {
++            return -1;
++        }
++        seq->head.colour_primaries = u_v(&extension, 8, "colour_primaries");
++        seq->head.transfer_characteristics = u_v(&extension, 8, "transfer_characteristics");
++        seq->head.matrix_coefficients = u_v(&extension, 8, "matrix_coefficients");
++    } else {
++        seq->head.colour_primaries = 2;
++        seq->head.transfer_characteristics = 2;
++        seq->head.matrix_coefficients = 2;
++    }
++
++    bs_align(&extension);
++    bs->i_bit_pos = extension.i_bit_pos;
++
++    davs2_log(mgr, DAVS2_LOG_INFO,
++              "Parsed sequence display extension: range=%u colour_description=%u primaries=%u trc=%u matrix=%u",
++              seq->head.sample_range,
++              seq->head.colour_description,
++              seq->head.colour_primaries,
++              seq->head.transfer_characteristics,
++              seq->head.matrix_coefficients);
++
++    return 1;
++}
++
+ 
+ /* ---------------------------------------------------------------------------
+  * init deblock parame of one frame
+@@ -1537,7 +1600,23 @@
+ 
+             break;
+ 
+-        case SC_EXTENSION:
++        case SC_EXTENSION: {
++            if (h->task_info.taskmgr->seq_info.valid_flag) {
++                davs2_seq_t new_seq = h->task_info.taskmgr->seq_info;
++                int ret = parse_extension_header(h->task_info.taskmgr, &new_seq, p_bs);
++
++                if (ret < 0) {
++                    return -1;
++                }
++                if (ret > 0 && task_set_sequence_head(h->task_info.taskmgr, &new_seq) < 0) {
++                    return -1;
++                }
++            } else {
++                *bitpos += 32;
++            }
++            break;
++        }
++
+         case SC_USER_DATA:
+         case SC_SEQUENCE_END:
+         case SC_VIDEO_EDIT_CODE:
+diff --git a/source/davs2.h b/source/davs2.h
+--- a/source/davs2.h
++++ b/source/davs2.h
+@@ -138,6 +138,13 @@
+     uint32_t        bytes_per_sample;   /* bytes per sample */
+     float           frame_rate;         /* frame rate */
+     uint32_t        frame_rate_id;      /* frame rate code, mpeg12 [1...8] */
++    uint32_t        sequence_display_extension; /* 存在序列显示扩展 */
++    uint32_t        video_format;       /* 序列显示扩展中的视频格式 */
++    uint32_t        sample_range;       /* 量化范围（0：有限，1：全范围） */
++    uint32_t        colour_description; /* 存在色彩描述 */
++    uint32_t        colour_primaries;   /* 色彩原色 */
++    uint32_t        transfer_characteristics; /* 传递函数 */
++    uint32_t        matrix_coefficients; /* 矩阵系数 */
+ } davs2_seq_info_t;  
+ 
+ /* ---------------------------------------------------------------------------
+diff --git a/source/common/davs2.cc b/source/common/davs2.cc
+--- a/source/common/davs2.cc
++++ b/source/common/davs2.cc
+@@ -354,6 +354,7 @@
+     }
+ 
+     /* deliver this frame */
++    memcpy(headerset, pic->head, sizeof(davs2_seq_info_t));
+     memcpy(out_frame, pic->pic, sizeof(davs2_picture_t));
+     out_frame->magic       = pic;
+     return DAVS2_GOT_FRAME;

@@ -28,6 +28,8 @@ The build downloads third-party sources into the workflow temp work root (`$RUNN
 - `patches/davs2-10bit/0003-fix-dpb-stale-ref-frames.patch`
   - fixes a hang in the DPB (decoded picture buffer) allocation loop that can occur with certain AVS2 streams,
   - recycles stale reference frames that have `b_refered_by_others==1 && i_ref_count==0` (zombie frames never cleaned by the RPS) instead of blocking the pipeline forever.
+- [`patches/davs2-10bit/0004-export-sequence-display-color-description.patch`](./patches/davs2-10bit/0004-export-sequence-display-color-description.patch)
+  - reads AVS2 sequence-display range and color descriptions and returns the header belonging to each decoded frame.
 - [`patches/ffmpeg/0001-avs-dra-runtime.patch`](./patches/ffmpeg/0001-avs-dra-runtime.patch)
   - vendors the existing native AVS+/DRA decoders and ports their integration to FFmpeg 9,
   - preserves the upstream 9.x CAVS parser's sequence-header parsing,
@@ -41,6 +43,10 @@ The build downloads third-party sources into the workflow temp work root (`$RUNN
 - [`patches/ffmpeg/0003-av3a-container-remux.patch`](./patches/ffmpeg/0003-av3a-container-remux.patch)
   - adds AV3A MP4 configuration reading/writing, MPEG-TS signalling and raw-stream output,
   - preserves compressed packets without an AV3A decoder or encoder SDK.
+
+- [`patches/ffmpeg/0004-libdavs2-export-sequence-display-color-metadata.patch`](./patches/ffmpeg/0004-libdavs2-export-sequence-display-color-metadata.patch)
+  - maps AVS2 color identifiers to FFmpeg range, primaries, transfer and matrix fields, including BT.2020, PQ and HLG,
+  - preserves container color information when the bitstream does not provide it; applied in GPL builds alongside the patched static davs2.
 
 See [`patches/ffmpeg/README.md`](./patches/ffmpeg/README.md) for source provenance,
 position metadata, allocation behavior and the decoder-specific opaque contract.

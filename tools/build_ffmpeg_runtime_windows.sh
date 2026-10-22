@@ -41,9 +41,11 @@ DAVS2_INSTALL_ROOT="$WORK_ROOT/davs2-install"
 DAVS2_PATCH_PATH="$REPO_ROOT/patches/davs2-10bit/0001-enable-10bit-build-and-propagate-frame-packet-position.patch"
 DAVS2_COMPAT_PATCH_PATH="$REPO_ROOT/patches/davs2-10bit/0002-x86-build-avx-codepaths-as-dispatch-only.patch"
 DAVS2_DPB_FIX_PATCH_PATH="$REPO_ROOT/patches/davs2-10bit/0003-fix-dpb-stale-ref-frames.patch"
+DAVS2_COLOR_PATCH_PATH="$REPO_ROOT/patches/davs2-10bit/0004-export-sequence-display-color-description.patch"
 FFMPEG_RUNTIME_PATCH_PATH="$REPO_ROOT/patches/ffmpeg/0001-avs-dra-runtime.patch"
 FFMPEG_AV3A_PATCH_PATH="$REPO_ROOT/patches/ffmpeg/0002-av3a-demux-probing.patch"
 FFMPEG_AV3A_CONTAINER_PATCH_PATH="$REPO_ROOT/patches/ffmpeg/0003-av3a-container-remux.patch"
+FFMPEG_DAVS2_COLOR_PATCH_PATH="$REPO_ROOT/patches/ffmpeg/0004-libdavs2-export-sequence-display-color-metadata.patch"
 SUBTITLE_INSTALL_ROOT="$WORK_ROOT/subtitle-install"
 INSTALL_ROOT="$WORK_ROOT/install"
 PACKAGE_ROOT="$WORK_ROOT/package"
@@ -154,6 +156,11 @@ patch -d "$SOURCE_DIR" -p1 --batch --forward --fuzz=0 --dry-run <"$FFMPEG_AV3A_P
 patch -d "$SOURCE_DIR" -p1 --batch --forward --fuzz=0 <"$FFMPEG_AV3A_PATCH_PATH"
 patch -d "$SOURCE_DIR" -p1 --batch --forward --fuzz=0 --dry-run <"$FFMPEG_AV3A_CONTAINER_PATCH_PATH" >/dev/null
 patch -d "$SOURCE_DIR" -p1 --batch --forward --fuzz=0 <"$FFMPEG_AV3A_CONTAINER_PATCH_PATH"
+# AVS2 色彩补丁作用于使用扩展 davs2 头的 GPL 构建。
+if [[ "$LICENSE_FLAVOR" == "gpl" ]]; then
+  patch -d "$SOURCE_DIR" -p1 --batch --forward --fuzz=0 --dry-run <"$FFMPEG_DAVS2_COLOR_PATCH_PATH" >/dev/null
+  patch -d "$SOURCE_DIR" -p1 --batch --forward --fuzz=0 <"$FFMPEG_DAVS2_COLOR_PATCH_PATH"
+fi
 
 rm -rf "$INSTALL_ROOT" "$PACKAGE_ROOT" "$UAVS3D_INSTALL_ROOT" "$UAVS3D_SOURCE_DIR" "$DAVS2_INSTALL_ROOT" "$DAVS2_SOURCE_DIR"
 mkdir -p "$INSTALL_ROOT" "$RUNTIME_ROOT" "$UAVS3D_INSTALL_ROOT"
@@ -209,7 +216,7 @@ if [[ "$LICENSE_FLAVOR" == "gpl" ]]; then
   git -C "$DAVS2_SOURCE_DIR" config core.autocrlf false
   git -C "$DAVS2_SOURCE_DIR" checkout --detach FETCH_HEAD
 
-  for davs2_patch_path in "$DAVS2_PATCH_PATH" "$DAVS2_COMPAT_PATCH_PATH" "$DAVS2_DPB_FIX_PATCH_PATH"; do
+  for davs2_patch_path in "$DAVS2_PATCH_PATH" "$DAVS2_COMPAT_PATCH_PATH" "$DAVS2_DPB_FIX_PATCH_PATH" "$DAVS2_COLOR_PATCH_PATH"; do
     if [[ ! -f "$davs2_patch_path" ]]; then
       echo "Missing davs2 patch file: $davs2_patch_path" >&2
       exit 1

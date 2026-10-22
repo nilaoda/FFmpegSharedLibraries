@@ -96,3 +96,22 @@ The packaged-runtime verifier exercises MP4, MPEG-TS and raw AV3A round trips,
 checks configuration and packet hashes, and rejects missing/truncated output
 configuration. Its optional `av3a` sample mode runs the same payload checks on
 real files without decoding or writing sample output to disk.
+
+## AVS2 color metadata
+
+`0004-libdavs2-export-sequence-display-color-metadata.patch` applies after `0003`
+in GPL builds. It requires
+`patches/davs2-10bit/0004-export-sequence-display-color-description.patch` and
+rebuilding the static davs2 dependency with its matching header. It does not
+change the public FFmpeg ABI or add a runtime library.
+
+The patches read the signalled AVS2 sequence-display color description.
+AVS2 transfer identifiers 12 (PQ) and 14 (HLG), and matrix identifiers
+8/9 (BT.2020), require explicit conversion to FFmpeg's different enum values.
+
+The patches bound extension reads to their start-code unit, return each output
+frame's own sequence header across reordering and same-size sequence changes,
+and fall back to the initial container color fields when a new sequence omits
+color descriptions. Out-of-table identifiers become unspecified rather than
+retaining the previous sequence's tags. Decoded frame and codec-context color
+fields are both populated for downstream previews and stream probing.
