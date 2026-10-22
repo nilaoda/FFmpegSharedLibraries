@@ -55,7 +55,6 @@ jobs:
             "$ROOT/package/libavfilter.so.12" \
             "$ROOT/package/libswscale.so.10" \
             "$ROOT/package/libswresample.so.7" \
-            "$ROOT/package/libass.so.9" \
             -Wl,-rpath,'$ORIGIN' -Wl,-rpath-link,"$ROOT/package" \
             -o "$ROOT/package/verify_runtime"
           "$ROOT/package/verify_runtime"

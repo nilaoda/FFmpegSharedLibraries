@@ -1,0 +1,12 @@
+diff --git a/libass/meson.build b/libass/meson.build
+--- a/libass/meson.build
++++ b/libass/meson.build
+@@ -126,7 +126,7 @@
+     'ass',
+     libass_src,
+     config_h,
+-    link_with: libass_link_with,
++    link_whole: libass_link_with,
+     version: libass_so_version,
+     # This emulates the GNU libtool compat/current versioning computation
+     darwin_versions: [

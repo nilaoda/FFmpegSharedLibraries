@@ -38,7 +38,6 @@ jobs:
             "$ROOT/package/libavfilter.12.dylib" \
             "$ROOT/package/libswscale.10.dylib" \
             "$ROOT/package/libswresample.7.dylib" \
-            "$ROOT/package/libass.9.dylib" \
             -o "$ROOT/package/verify_runtime"
           "$ROOT/package/verify_runtime"
 

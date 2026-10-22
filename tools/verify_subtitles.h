@@ -28,6 +28,61 @@ static int subtitle_image_left(const ASS_Image *image)
 
 static int verify_ass_render(void)
 {
+    /* 直接从 avfilter 链接全部公开接口，避免只导出滤镜自身用到的一部分函数。 */
+    void (*volatile public_api[])(void) = {
+        (void (*)(void))ass_library_init,
+        (void (*)(void))ass_library_done,
+        (void (*)(void))ass_library_version,
+        (void (*)(void))ass_set_fonts_dir,
+        (void (*)(void))ass_set_extract_fonts,
+        (void (*)(void))ass_set_style_overrides,
+        (void (*)(void))ass_renderer_init,
+        (void (*)(void))ass_renderer_done,
+        (void (*)(void))ass_set_frame_size,
+        (void (*)(void))ass_set_storage_size,
+        (void (*)(void))ass_set_margins,
+        (void (*)(void))ass_set_use_margins,
+        (void (*)(void))ass_set_aspect_ratio,
+        (void (*)(void))ass_set_font_scale,
+        (void (*)(void))ass_set_hinting,
+        (void (*)(void))ass_set_line_spacing,
+        (void (*)(void))ass_get_available_font_providers,
+        (void (*)(void))ass_set_fonts,
+        (void (*)(void))ass_render_frame,
+        (void (*)(void))ass_new_track,
+        (void (*)(void))ass_free_track,
+        (void (*)(void))ass_alloc_style,
+        (void (*)(void))ass_alloc_event,
+        (void (*)(void))ass_free_style,
+        (void (*)(void))ass_free_event,
+        (void (*)(void))ass_process_data,
+        (void (*)(void))ass_process_codec_private,
+        (void (*)(void))ass_process_chunk,
+        (void (*)(void))ass_read_file,
+        (void (*)(void))ass_read_memory,
+        (void (*)(void))ass_read_styles,
+        (void (*)(void))ass_add_font,
+        (void (*)(void))ass_clear_fonts,
+        (void (*)(void))ass_step_sub,
+        (void (*)(void))ass_process_force_style,
+        (void (*)(void))ass_set_message_cb,
+        (void (*)(void))ass_fonts_update,
+        (void (*)(void))ass_set_cache_limits,
+        (void (*)(void))ass_flush_events,
+        (void (*)(void))ass_set_shaper,
+        (void (*)(void))ass_set_line_position,
+        (void (*)(void))ass_set_pixel_aspect,
+        (void (*)(void))ass_set_selective_style_override_enabled,
+        (void (*)(void))ass_set_selective_style_override,
+        (void (*)(void))ass_set_check_readorder,
+        (void (*)(void))ass_track_set_feature,
+        (void (*)(void))ass_malloc,
+        (void (*)(void))ass_free,
+        (void (*)(void))ass_prune_events,
+        (void (*)(void))ass_configure_prune,
+    };
+    for (unsigned i = 0; i < sizeof(public_api) / sizeof(public_api[0]); i++)
+        SUBTITLE_CHECK(public_api[i] != NULL);
     char script[] =
         "[Script Info]\nScriptType: v4.00+\nPlayResX: 320\nPlayResY: 180\n"
         "[V4+ Styles]\n"

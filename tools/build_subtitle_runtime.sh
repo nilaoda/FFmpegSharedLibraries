@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# 字幕依赖独立安装；只发布 libass，共享库内部静态链接字体和排版依赖。
+# 字幕依赖均构建为静态库，随后合入 FFmpeg 的 avfilter。
 SUBTITLE_PLATFORM="${1:?usage: build_subtitle_runtime.sh <macos|linux|windows> <work-root> [jobs]}"
 SUBTITLE_WORK_ROOT="${2:?Missing work root}"
 SUBTITLE_JOBS="${3:-4}"
@@ -142,26 +142,21 @@ case "$SUBTITLE_PLATFORM" in
     ;;
 esac
 
-# 沿用上游公开 API 清单，隐藏静态依赖和 libass 的内部符号。
+# 静态库包含独立编译的汇编目标，保证安装后仍可完整链接。
 patch -d "$SUBTITLE_SOURCE_ROOT/libass-0.17.4" -p1 --batch --forward --fuzz=0 \
-  < "$SUBTITLE_SCRIPT_DIR/../patches/libass/0001-meson-shared-library-exports.patch"
-awk '{print "_" $0}' "$SUBTITLE_SOURCE_ROOT/libass-0.17.4/libass/libass.sym" \
-  > "$SUBTITLE_SOURCE_ROOT/libass-0.17.4/libass/libass.exports"
-{
-  echo '{ global:'
-  awk '{print $0 ";"}' "$SUBTITLE_SOURCE_ROOT/libass-0.17.4/libass/libass.sym"
-  echo 'local: *; };'
-} > "$SUBTITLE_SOURCE_ROOT/libass-0.17.4/libass/libass.map"
+  < "$SUBTITLE_SCRIPT_DIR/../patches/libass/0001-meson-static-assembly.patch"
+mkdir -p "$SUBTITLE_INSTALL_ROOT/share/libass"
+cp "$SUBTITLE_SOURCE_ROOT/libass-0.17.4/libass/libass.sym" "$SUBTITLE_INSTALL_ROOT/share/libass/"
 
 meson setup "$SUBTITLE_BUILD_ROOT/libass" "$SUBTITLE_SOURCE_ROOT/libass-0.17.4" \
-  "${SUBTITLE_MESON_FLAGS[@]}" --default-library=shared --prefix="$SUBTITLE_INSTALL_ROOT" -Dprefer_static=true \
+  "${SUBTITLE_MESON_FLAGS[@]}" --default-library=static --prefix="$SUBTITLE_INSTALL_ROOT" -Dprefer_static=true \
   "${SUBTITLE_PLATFORM_FLAGS[@]}" -Dlibunibreak=enabled -Dasm=enabled -Dtest=disabled -Dcompare=disabled \
   -Dprofile=disabled -Dcheckasm=disabled -Dfuzz=disabled
 meson compile -C "$SUBTITLE_BUILD_ROOT/libass" -j "$SUBTITLE_JOBS"
 meson install -C "$SUBTITLE_BUILD_ROOT/libass"
 
 cat > "$SUBTITLE_INSTALL_ROOT/versions.txt" <<VERSIONS
-libass: 0.17.4 (shared, ABI 9)
+libass: 0.17.4 (static in libavfilter, public API exported)
 FreeType: 2.13.3 (static)
 HarfBuzz: 10.2.0 (static)
 FriBidi: 1.0.16 (static)

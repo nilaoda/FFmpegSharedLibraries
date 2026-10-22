@@ -115,3 +115,22 @@ and fall back to the initial container color fields when a new sequence omits
 color descriptions. Out-of-table identifiers become unspecified rather than
 retaining the previous sequence's tags. Decoded frame and codec-context color
 fields are both populated for downstream previews and stream probing.
+
+## Embedded libass API
+
+`0005-embed-libass-in-avfilter.patch` applies after the preceding FFmpeg patches
+on all platforms. `tools/embed_libass.sh` extracts the pinned static libass
+archive into the FFmpeg source tree and generates `libass-embedded.mak` plus the
+public export list before FFmpeg is configured. Linking the objects directly
+keeps APIs that FFmpeg's own subtitle filters do not call and lets Windows build
+them into its DLL export/import tables.
+
+Exports follow upstream `libass.sym`. The macOS symbol-list generator preserves
+these exact names, and the Windows definition generator matches complete names,
+so an API such as `ass_free` does not also expose internal `ass_free_*` helpers.
+The existing FFmpeg public API and structure layouts are unchanged.
+
+libass and its font/shaping dependencies are static. Only the seven FFmpeg
+shared libraries are packaged. The runtime verifier links and checks all public
+libass APIs through libavfilter, then renders real subtitle pixels with system
+fonts, animation, Unicode wrapping and seeking.

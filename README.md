@@ -8,12 +8,12 @@ GitHub Actions workflows for building FFmpeg shared-library runtimes with subtit
 - `windows-latest`: win64 `.dll`
 - `ubuntu-latest`: linux x64 `.so`
 
-Each runtime contains seven FFmpeg shared libraries and one libass shared library (ABI 9).
+Each runtime contains seven FFmpeg shared libraries. libass is linked statically into libavfilter, which also exports its public API; no separate libass runtime file is needed.
 
 - `libuavs3d` is always built from source as a static dependency and linked into FFmpeg.
 - `libdavs2` (`davs2-10bit`) is built from source and linked statically when `license_flavor=gpl`.
 - Runtime artifacts do not include separate `libuavs3d`/`libdavs2` dynamic libraries.
-- libass statically includes FreeType, HarfBuzz, FriBidi and libunibreak. Linux also statically includes Fontconfig and Expat. These dependencies do not add separate runtime libraries.
+- libass, FreeType, HarfBuzz, FriBidi and libunibreak are linked statically into libavfilter. Linux also statically includes Fontconfig and Expat. These dependencies do not add separate runtime libraries.
 - The macOS runtime enables VideoToolbox hardware decoding.
 - The Windows runtime enables D3D11VA and DXVA2 hardware decoding through Windows system APIs without additional runtime DLLs.
 
@@ -47,6 +47,10 @@ The build downloads third-party sources into the workflow temp work root (`$RUNN
 - [`patches/ffmpeg/0004-libdavs2-export-sequence-display-color-metadata.patch`](./patches/ffmpeg/0004-libdavs2-export-sequence-display-color-metadata.patch)
   - maps AVS2 color identifiers to FFmpeg range, primaries, transfer and matrix fields, including BT.2020, PQ and HLG,
   - preserves container color information when the bitstream does not provide it; applied in GPL builds alongside the patched static davs2.
+
+- [`patches/ffmpeg/0005-embed-libass-in-avfilter.patch`](./patches/ffmpeg/0005-embed-libass-in-avfilter.patch)
+  - includes static libass objects in libavfilter and preserves exact public API exports on all three platforms,
+  - uses `tools/embed_libass.sh` to prepare the objects and upstream API list before configuring FFmpeg.
 
 See [`patches/ffmpeg/README.md`](./patches/ffmpeg/README.md) for source provenance,
 position metadata, allocation behavior and the decoder-specific opaque contract.
@@ -87,7 +91,7 @@ FFmpeg provides text subtitle decoding (including MP4 mov_text, SRT, SSA/ASS and
 WebVTT) and bitmap subtitle decoding (PGS, DVB and DVD), plus CEA-608 captions.
 The `ass` and `subtitles` filters are enabled.
 
-Applications can call the bundled libass directly to render SSA/ASS as transparent
+Applications can call the `ass_*` API exported by libavfilter to render SSA/ASS as transparent
 bitmap overlays, including styling, animation and complex text shaping. Decoded
 text subtitles can be passed to libass for the same preview path. PGS/DVB/DVD
 subtitles already decode to bitmaps and should be composited by the application.
@@ -98,26 +102,30 @@ and Fontconfig on Linux. Linux hosts need a font installation and Fontconfig
 configuration (normally `/etc/fonts`). No font files are bundled. Applications
 can supply MKV font attachments through `ass_add_font` before rendering.
 
-`tools/build_subtitle_runtime.sh` builds pinned, SHA-256-checked sources. The local
-[`libass Meson patch`](./patches/libass/0001-meson-shared-library-exports.patch)
-limits shared-library exports to upstream's `libass.sym` public API list, matching
-its Autotools build. The runtime manifest records dependency versions.
+`tools/build_subtitle_runtime.sh` builds pinned, SHA-256-checked static sources.
+The [libass Meson patch](./patches/libass/0001-meson-static-assembly.patch)
+includes its separately compiled assembly objects in the installed archive.
+`tools/embed_libass.sh` adds all libass objects to libavfilter and limits its
+subtitle exports to upstream's `libass.sym` public API list. Font and shaping
+implementation symbols remain internal. The runtime manifest records versions.
 
 ## Runtime Loading and Diagnostics
 
-Load libraries from one runtime package and directory. Load libass before
-libavfilter, since the subtitle-enabled libavfilter depends on it. The libass
-filenames are `libass.9.dylib`, `libass.so.9` and `libass-9.dll` on macOS, Linux
-and Windows respectively.
+Load all seven libraries from one runtime package and directory. Subtitle
+rendering uses the embedded libass API in libavfilter; do not load a separate
+libass shared library.
 
 Before using native structures, applications must check FFmpeg ABI majors against
-the table above. Subtitle rendering requires libass API version 0.17.4
-(`ass_library_version() >= 0x01704000`, within API major version 0) and the entry
-points used by the application. A matching filename alone is insufficient.
+the table above. Before rendering text subtitles, check
+`ass_library_version() >= 0x01704000` within API major version 0 and every `ass_*`
+entry point used by the application, resolving them from libavfilter. A matching
+FFmpeg filename or ABI major alone does not guarantee subtitle support.
+
 Report missing files, incompatible versions, missing entry points and loader
-errors with the failing file's path, and ask the user to restore the complete
-matching runtime package. On Windows, a load error can identify the parent DLL
-when one of its dependencies is missing; check for `libass-9.dll` explicitly.
+errors with the failing library path. Restore the complete matching runtime
+package when these checks fail. Applications may keep ordinary preview available
+when libavfilter loads successfully but lacks subtitle APIs, and report the
+missing support when text subtitle rendering is requested.
 
 ## Verification
 
@@ -151,7 +159,7 @@ clang -O2 -Wall -Wextra -I"$ROOT/install/include" \
   "$ROOT/package/libavfilter.12.dylib" \
   "$ROOT/package/libswscale.10.dylib" \
   "$ROOT/package/libswresample.7.dylib" \
-  "$ROOT/package/libass.9.dylib" -o "$ROOT/package/verify_runtime"
+  -o "$ROOT/package/verify_runtime"
 "$ROOT/package/verify_runtime" /path/to/AVS2.ts
 "$ROOT/package/verify_runtime" /path/to/DRA.ts dra
 "$ROOT/package/verify_runtime" /path/to/raw.cavs cavsvideo

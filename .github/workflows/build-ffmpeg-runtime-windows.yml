@@ -51,7 +51,7 @@ jobs:
           ROOT="$(cygpath -u "$RUNNER_TEMP/$WORK_ROOT_DIR")"
           gcc -O2 -Wall -Wextra -I"$ROOT/install/include" -I"$ROOT/subtitle-install/include" tools/verify_runtime.c \
             -L"$ROOT/install/lib" -lavformat -lavcodec -lavutil \
-            -lavdevice -lavfilter -lswscale -lswresample -L"$ROOT/subtitle-install/lib" -lass \
+            -lavdevice -lavfilter -lswscale -lswresample \
             -o "$ROOT/package/verify_runtime.exe"
           "$ROOT/package/verify_runtime.exe"
 

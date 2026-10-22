@@ -46,6 +46,7 @@ FFMPEG_RUNTIME_PATCH_PATH="$REPO_ROOT/patches/ffmpeg/0001-avs-dra-runtime.patch"
 FFMPEG_AV3A_PATCH_PATH="$REPO_ROOT/patches/ffmpeg/0002-av3a-demux-probing.patch"
 FFMPEG_AV3A_CONTAINER_PATCH_PATH="$REPO_ROOT/patches/ffmpeg/0003-av3a-container-remux.patch"
 FFMPEG_DAVS2_COLOR_PATCH_PATH="$REPO_ROOT/patches/ffmpeg/0004-libdavs2-export-sequence-display-color-metadata.patch"
+FFMPEG_LIBASS_EMBED_PATCH_PATH="$REPO_ROOT/patches/ffmpeg/0005-embed-libass-in-avfilter.patch"
 SUBTITLE_INSTALL_ROOT="$WORK_ROOT/subtitle-install"
 INSTALL_ROOT="$WORK_ROOT/install"
 PACKAGE_ROOT="$WORK_ROOT/package"
@@ -78,7 +79,6 @@ LIBRARY_NAMES=(
   avformat-63.dll
   avfilter-12.dll
   avdevice-63.dll
-  libass-9.dll
 )
 
 SYSTEM_DLL_PATTERNS=(
@@ -161,6 +161,8 @@ if [[ "$LICENSE_FLAVOR" == "gpl" ]]; then
   patch -d "$SOURCE_DIR" -p1 --batch --forward --fuzz=0 --dry-run <"$FFMPEG_DAVS2_COLOR_PATCH_PATH" >/dev/null
   patch -d "$SOURCE_DIR" -p1 --batch --forward --fuzz=0 <"$FFMPEG_DAVS2_COLOR_PATCH_PATH"
 fi
+patch -d "$SOURCE_DIR" -p1 --batch --forward --fuzz=0 --dry-run <"$FFMPEG_LIBASS_EMBED_PATCH_PATH" >/dev/null
+patch -d "$SOURCE_DIR" -p1 --batch --forward --fuzz=0 <"$FFMPEG_LIBASS_EMBED_PATCH_PATH"
 
 rm -rf "$INSTALL_ROOT" "$PACKAGE_ROOT" "$UAVS3D_INSTALL_ROOT" "$UAVS3D_SOURCE_DIR" "$DAVS2_INSTALL_ROOT" "$DAVS2_SOURCE_DIR"
 mkdir -p "$INSTALL_ROOT" "$RUNTIME_ROOT" "$UAVS3D_INSTALL_ROOT"
@@ -289,19 +291,9 @@ EOF
   fi
 fi
 
-# 构建可独立调用的 libass，字体和文字排版依赖静态链接。
+# 将 libass 及字体、排版依赖静态合入 avfilter，并导出字幕公开接口。
 PKG_CONFIG_BIN="$PKG_CONFIG_BIN" bash "$SCRIPT_DIR/build_subtitle_runtime.sh" windows "$WORK_ROOT" "$CPU_COUNT"
-
-# 尽早检查新生成的 libass，避免完成整个 FFmpeg 构建后才发现额外运行库依赖。
-subtitle_dependencies="$(dll_dependencies "$SUBTITLE_INSTALL_ROOT/bin/libass-9.dll")"
-while IFS= read -r dependency; do
-  [[ -n "$dependency" ]] || continue
-  dependency_upper="$(printf '%s' "$dependency" | tr '[:lower:]' '[:upper:]')"
-  if ! is_system_dll "$dependency_upper"; then
-    echo "Unexpected external dependency in libass-9.dll: $dependency" >&2
-    exit 1
-  fi
-done <<< "$subtitle_dependencies"
+bash "$SCRIPT_DIR/embed_libass.sh" "$SOURCE_DIR" "$SUBTITLE_INSTALL_ROOT"
 
 PKG_CONFIG_PATH_ENTRIES=("$UAVS3D_INSTALL_ROOT/lib/pkgconfig" "$SUBTITLE_INSTALL_ROOT/lib/pkgconfig")
 CPPFLAGS_ENTRIES=("-I$UAVS3D_INSTALL_ROOT/include")
@@ -327,6 +319,7 @@ CONFIGURE_FLAGS=(
   --ranlib=ranlib
   --windres=windres
   --pkg-config="$PKG_CONFIG_BIN"
+  --pkg-config-flags=--static
   --enable-shared
   --disable-static
   --disable-programs
@@ -396,9 +389,6 @@ popd >/dev/null
 
 for library_name in "${LIBRARY_NAMES[@]}"; do
   source_path="$INSTALL_ROOT/bin/$library_name"
-  if [[ "$library_name" == libass-9.dll ]]; then
-    source_path="$SUBTITLE_INSTALL_ROOT/bin/$library_name"
-  fi
   if [[ ! -f "$source_path" ]]; then
     echo "Missing expected FFmpeg runtime library: $library_name" >&2
     exit 1

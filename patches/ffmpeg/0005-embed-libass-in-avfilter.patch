@@ -1,0 +1,36 @@
+diff --git a/libavfilter/Makefile b/libavfilter/Makefile
+--- a/libavfilter/Makefile
++++ b/libavfilter/Makefile
+@@ -1,5 +1,8 @@
+ NAME = avfilter
+ DESC = FFmpeg audio/video filtering library
++
++# 静态 libass 目标文件由运行库构建脚本准备。
++include $(SRC_PATH)/libavfilter/libass-embedded.mak
+ 
+ HEADERS = avfilter.h                                                    \
+           buffersink.h                                                  \
+diff --git a/compat/windows/makedef b/compat/windows/makedef
+--- a/compat/windows/makedef
++++ b/compat/windows/makedef
+@@ -141,7 +141,7 @@
+ for exp in ${regex}; do
+     list="${list}"'
+ '$(echo "${dump}" |
+-          grep "^${exp}" |
++          grep "^${exp}$" |
+           sed -e 's/^/    /')
+ done
+ 
+diff --git a/configure b/configure
+--- a/configure
++++ b/configure
+@@ -6195,7 +6195,7 @@
+             is_in -isysroot $ld $LDFLAGS          || check_ldflags  -isysroot $sysroot
+         fi
+         version_script='-exported_symbols_list'
+-        VERSION_SCRIPT_POSTPROCESS_CMD='tr " " "\n" | sed -n /global:/,/local:/p | grep ";" | tr ";" "\n" | sed -E "s/(.+)/_\1/g" | sed -E "s/(.+[^*])$$$$/\1*/"'
++        VERSION_SCRIPT_POSTPROCESS_CMD='tr " " "\n" | sed -n /global:/,/local:/p | grep ";" | tr ";" "\n" | sed -E "s/(.+)/_\1/g" | sed -E "/^_ass_/!s/(.+[^*])$$$$/\1*/"'
+         # Workaround for Xcode 11 -fstack-check bug
+         if enabled clang; then
+             clang_version=$($cc -dumpversion)

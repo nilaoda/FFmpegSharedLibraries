@@ -45,6 +45,7 @@ FFMPEG_RUNTIME_PATCH_PATH="$REPO_ROOT/patches/ffmpeg/0001-avs-dra-runtime.patch"
 FFMPEG_AV3A_PATCH_PATH="$REPO_ROOT/patches/ffmpeg/0002-av3a-demux-probing.patch"
 FFMPEG_AV3A_CONTAINER_PATCH_PATH="$REPO_ROOT/patches/ffmpeg/0003-av3a-container-remux.patch"
 FFMPEG_DAVS2_COLOR_PATCH_PATH="$REPO_ROOT/patches/ffmpeg/0004-libdavs2-export-sequence-display-color-metadata.patch"
+FFMPEG_LIBASS_EMBED_PATCH_PATH="$REPO_ROOT/patches/ffmpeg/0005-embed-libass-in-avfilter.patch"
 SUBTITLE_INSTALL_ROOT="$WORK_ROOT/subtitle-install"
 INSTALL_ROOT="$WORK_ROOT/install"
 PACKAGE_ROOT="$WORK_ROOT/package"
@@ -77,7 +78,6 @@ LIBRARY_NAMES=(
   libavformat.so.63
   libavfilter.so.12
   libavdevice.so.63
-  libass.so.9
 )
 
 SYSTEM_SO_PATTERNS=(
@@ -114,6 +114,8 @@ if [[ "$LICENSE_FLAVOR" == "gpl" ]]; then
   patch -d "$SOURCE_DIR" -p1 --batch --forward --fuzz=0 --dry-run <"$FFMPEG_DAVS2_COLOR_PATCH_PATH" >/dev/null
   patch -d "$SOURCE_DIR" -p1 --batch --forward --fuzz=0 <"$FFMPEG_DAVS2_COLOR_PATCH_PATH"
 fi
+patch -d "$SOURCE_DIR" -p1 --batch --forward --fuzz=0 --dry-run <"$FFMPEG_LIBASS_EMBED_PATCH_PATH" >/dev/null
+patch -d "$SOURCE_DIR" -p1 --batch --forward --fuzz=0 <"$FFMPEG_LIBASS_EMBED_PATCH_PATH"
 
 rm -rf "$INSTALL_ROOT" "$PACKAGE_ROOT" "$UAVS3D_INSTALL_ROOT" "$UAVS3D_SOURCE_DIR" "$DAVS2_INSTALL_ROOT" "$DAVS2_SOURCE_DIR"
 mkdir -p "$INSTALL_ROOT" "$RUNTIME_ROOT" "$UAVS3D_INSTALL_ROOT"
@@ -242,8 +244,9 @@ EOF
   fi
 fi
 
-# 构建可独立调用的 libass，字体和文字排版依赖静态链接。
+# 将 libass 及字体、排版依赖静态合入 avfilter，并导出字幕公开接口。
 PKG_CONFIG_BIN="$PKG_CONFIG_BIN" bash "$SCRIPT_DIR/build_subtitle_runtime.sh" linux "$WORK_ROOT" "$CPU_COUNT"
+bash "$SCRIPT_DIR/embed_libass.sh" "$SOURCE_DIR" "$SUBTITLE_INSTALL_ROOT"
 
 PKG_CONFIG_PATH_ENTRIES=("$UAVS3D_INSTALL_ROOT/lib/pkgconfig" "$SUBTITLE_INSTALL_ROOT/lib/pkgconfig")
 CPPFLAGS_ENTRIES=("-I$UAVS3D_INSTALL_ROOT/include")
@@ -266,6 +269,7 @@ CONFIGURE_FLAGS=(
   --cc=gcc
   --cxx=g++
   --pkg-config="$PKG_CONFIG_BIN"
+  --pkg-config-flags=--static
   --enable-shared
   --enable-pthreads
   --disable-static
@@ -275,6 +279,7 @@ CONFIGURE_FLAGS=(
   --enable-pic
   --disable-autodetect
   --enable-libass
+  --extra-libs=-lstdc++
   --enable-filter=ass,subtitles
   --disable-ffplay
   --disable-network
@@ -311,9 +316,6 @@ popd >/dev/null
 
 for library_name in "${LIBRARY_NAMES[@]}"; do
   source_path="$INSTALL_ROOT/lib/$library_name"
-  if [[ "$library_name" == libass.so.9 ]]; then
-    source_path="$SUBTITLE_INSTALL_ROOT/lib/$library_name"
-  fi
   if [[ ! -f "$source_path" ]]; then
     echo "Missing expected FFmpeg runtime library: $library_name" >&2
     exit 1
