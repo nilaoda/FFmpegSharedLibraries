@@ -52,6 +52,10 @@ The build downloads third-party sources into the workflow temp work root (`$RUNN
   - includes static libass objects in libavfilter and preserves exact public API exports on all three platforms,
   - uses `tools/embed_libass.sh` to prepare the objects and upstream API list before configuring FFmpeg.
 
+- [`patches/ffmpeg/0006-av3a-stream-metadata.patch`](./patches/ffmpeg/0006-av3a-stream-metadata.patch)
+  - exposes Audio Vivid content type, bed channel count/layout, object count and HOA order as stream metadata,
+  - preserves codec channel accounting; a 7.1.4 bed with four objects still has 16 coded components.
+
 See [`patches/ffmpeg/README.md`](./patches/ffmpeg/README.md) for source provenance,
 position metadata, allocation behavior and the decoder-specific opaque contract.
 

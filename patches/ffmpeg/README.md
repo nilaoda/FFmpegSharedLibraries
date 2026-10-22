@@ -97,6 +97,21 @@ checks configuration and packet hashes, and rejects missing/truncated output
 configuration. Its optional `av3a` sample mode runs the same payload checks on
 real files without decoding or writing sample output to disk.
 
+## AV3A stream metadata
+
+`0006-av3a-stream-metadata.patch` applies after the existing AV3A patches.
+It reads complete AATF frames in the demux path and exposes `av3a_content_type`,
+`av3a_bed_channels`, `av3a_bed_layout`, `av3a_objects` and `av3a_hoa_order`
+as stream metadata for MP4, MPEG-TS and raw AV3A inputs. Fields that do not
+apply to the current configuration are omitted. Configuration changes update
+the metadata and clear obsolete fields; unchanged configurations avoid repeated
+dictionary allocation.
+
+The codec channel count is preserved. A 7.1.4 bed with four objects reports
+12 bed channels, layout `7.1.4`, and four objects while retaining 16 coded
+components. The same metadata is available to `ffprobe -show_streams` and
+library clients after stream probing or packet reading, without a decoder SDK.
+
 ## AVS2 color metadata
 
 `0004-libdavs2-export-sequence-display-color-metadata.patch` applies after `0003`

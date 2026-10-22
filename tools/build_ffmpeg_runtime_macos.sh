@@ -44,6 +44,7 @@ DAVS2_COLOR_PATCH_PATH="$REPO_ROOT/patches/davs2-10bit/0004-export-sequence-disp
 FFMPEG_RUNTIME_PATCH_PATH="$REPO_ROOT/patches/ffmpeg/0001-avs-dra-runtime.patch"
 FFMPEG_AV3A_PATCH_PATH="$REPO_ROOT/patches/ffmpeg/0002-av3a-demux-probing.patch"
 FFMPEG_AV3A_CONTAINER_PATCH_PATH="$REPO_ROOT/patches/ffmpeg/0003-av3a-container-remux.patch"
+FFMPEG_AV3A_METADATA_PATCH_PATH="$REPO_ROOT/patches/ffmpeg/0006-av3a-stream-metadata.patch"
 FFMPEG_DAVS2_COLOR_PATCH_PATH="$REPO_ROOT/patches/ffmpeg/0004-libdavs2-export-sequence-display-color-metadata.patch"
 FFMPEG_LIBASS_EMBED_PATCH_PATH="$REPO_ROOT/patches/ffmpeg/0005-embed-libass-in-avfilter.patch"
 SUBTITLE_INSTALL_ROOT="$WORK_ROOT/subtitle-install"
@@ -105,6 +106,9 @@ if [[ "$LICENSE_FLAVOR" == "gpl" ]]; then
 fi
 patch -d "$SOURCE_DIR" -p1 --batch --forward --fuzz=0 --dry-run <"$FFMPEG_LIBASS_EMBED_PATCH_PATH" >/dev/null
 patch -d "$SOURCE_DIR" -p1 --batch --forward --fuzz=0 <"$FFMPEG_LIBASS_EMBED_PATCH_PATH"
+# 声道床和对象分别写入轨道元数据，保留原生总通道数。
+patch -d "$SOURCE_DIR" -p1 --batch --forward --fuzz=0 --dry-run <"$FFMPEG_AV3A_METADATA_PATCH_PATH" >/dev/null
+patch -d "$SOURCE_DIR" -p1 --batch --forward --fuzz=0 <"$FFMPEG_AV3A_METADATA_PATCH_PATH"
 
 rm -rf "$INSTALL_ROOT" "$PACKAGE_ROOT" "$UAVS3D_INSTALL_ROOT" "$UAVS3D_SOURCE_DIR" "$DAVS2_INSTALL_ROOT" "$DAVS2_SOURCE_DIR"
 mkdir -p "$INSTALL_ROOT" "$RUNTIME_ROOT" "$UAVS3D_INSTALL_ROOT"
