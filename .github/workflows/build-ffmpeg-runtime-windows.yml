@@ -49,7 +49,7 @@ jobs:
         shell: msys2 {0}
         run: |
           ROOT="$(cygpath -u "$RUNNER_TEMP/$WORK_ROOT_DIR")"
-          gcc -O2 -Wall -Wextra -I"$ROOT/install/include" -I"$ROOT/subtitle-install/include" tools/verify_runtime.c \
+          gcc -O2 -Wall -Wextra -I"$ROOT/install/include" -I"$ROOT/subtitle-install/include" -I"$ROOT/disc-install/include" tools/verify_runtime.c \
             -L"$ROOT/install/lib" -lavformat -lavcodec -lavutil \
             -lavdevice -lavfilter -lswscale -lswresample \
             -o "$ROOT/package/verify_runtime.exe"

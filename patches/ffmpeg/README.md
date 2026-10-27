@@ -149,3 +149,18 @@ libass and its font/shaping dependencies are static. Only the seven FFmpeg
 shared libraries are packaged. The runtime verifier links and checks all public
 libass APIs through libavfilter, then renders real subtitle pixels with system
 fonts, animation, Unicode wrapping and seeking.
+
+## Embedded disc APIs
+
+`0007-embed-disc-libraries-in-avformat.patch` applies after `0005` on all
+platforms. `tools/embed_discs.sh` extracts the pinned PIC static disc archives
+and generates `disc-embedded.mak` and the public export list before FFmpeg is
+configured. Linking the objects directly retains the libbluray and libdvdread
+APIs used by the GUI, including those FFmpeg itself does not call.
+
+The macOS symbol-list generator preserves exact `bd_`, `DVD` and `ifo` export
+names, avoiding wildcard references to private symbols. GPL builds embed
+libbluray, libudfread, libdvdread, libdvdnav and libdvdcss; LGPL builds include only
+libbluray and libudfread. Only the seven FFmpeg shared libraries are packaged.
+The runtime verifier links the required disc APIs through libavformat and
+checks DVD input and VOB/PGS subtitle decoder availability.

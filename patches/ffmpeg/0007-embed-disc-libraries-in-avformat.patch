@@ -1,0 +1,24 @@
+diff --git a/libavformat/Makefile b/libavformat/Makefile
+--- a/libavformat/Makefile
++++ b/libavformat/Makefile
+@@ -1,5 +1,8 @@
+ NAME = avformat
+ DESC = FFmpeg container format library
++
++# 静态光盘库对象由运行库构建脚本准备。
++include $(SRC_PATH)/libavformat/disc-embedded.mak
+ 
+ HEADERS = avformat.h                                                    \
+           avio.h                                                        \
+diff --git a/configure b/configure
+--- a/configure
++++ b/configure
+@@ -6195,7 +6195,7 @@
+             is_in -isysroot $ld $LDFLAGS          || check_ldflags  -isysroot $sysroot
+         fi
+         version_script='-exported_symbols_list'
+-        VERSION_SCRIPT_POSTPROCESS_CMD='tr " " "\n" | sed -n /global:/,/local:/p | grep ";" | tr ";" "\n" | sed -E "s/(.+)/_\1/g" | sed -E "/^_ass_/!s/(.+[^*])$$$$/\1*/"'
++        VERSION_SCRIPT_POSTPROCESS_CMD='tr " " "\n" | sed -n /global:/,/local:/p | grep ";" | tr ";" "\n" | sed -E "s/(.+)/_\1/g" | sed -E "/^_(ass_|bd_|DVD|ifo)/!s/(.+[^*])$$$$/\1*/"'
+         # Workaround for Xcode 11 -fstack-check bug
+         if enabled clang; then
+             clang_version=$($cc -dumpversion)

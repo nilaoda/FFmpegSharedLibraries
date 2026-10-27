@@ -200,3 +200,13 @@ with the repository or uploaded by the workflows.
 - [`.github/workflows/build-ffmpeg-runtime-macos.yml`](./.github/workflows/build-ffmpeg-runtime-macos.yml)
 - [`.github/workflows/build-ffmpeg-runtime-windows.yml`](./.github/workflows/build-ffmpeg-runtime-windows.yml)
 - [`.github/workflows/build-ffmpeg-runtime-linux.yml`](./.github/workflows/build-ffmpeg-runtime-linux.yml)
+
+## Disc image input
+
+GPL builds statically embed libbluray 1.5.0, libudfread 1.2.0, libdvdread 7.1.1, libdvdnav 7.0.0 and libdvdcss 1.6.0 into `avformat`. Packages still contain only the seven FFmpeg shared libraries; no separate disc DLLs, dylibs or SOs are needed. LGPL builds include only libbluray and libudfread, and do not enable DVD input.
+
+`tools/build_disc_runtime.sh` downloads pinned, SHA-256 checked sources and builds PIC static archives with Meson. `tools/embed_discs.sh` adds the archive objects and the required public exports to avformat. The GUI can resolve its libbluray/libdvdread calls from avformat, just as libass APIs are exposed by avfilter. DVD CSS support is linked directly through libdvdcss rather than relying on a system plugin. No libaacs or libbdplus is bundled; protected Blu-ray input remains unsupported. BD-J, menus, font rendering and XML metadata dependencies are disabled.
+
+The three GPL CI jobs compile `verify_discs.h` through `verify_runtime.c` against the packaged libraries, checking all APIs used by the GUI, DVD input and VOB/PGS subtitle decoders. Existing platform dependency checks reject unexpected dynamic dependencies.
+
+Static linking does not remove upstream licensing requirements. libbluray/libudfread use LGPL-2.1-or-later; libdvdread/libdvdnav/libdvdcss use GPL-2.0-or-later. Versions and build sources above form part of the runtime source distribution.

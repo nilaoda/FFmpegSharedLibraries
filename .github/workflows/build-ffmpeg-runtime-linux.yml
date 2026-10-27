@@ -47,7 +47,7 @@ jobs:
       - name: Verify packaged runtime
         run: |
           ROOT="$RUNNER_TEMP/$WORK_ROOT_DIR"
-          gcc -O2 -Wall -Wextra -I"$ROOT/install/include" -I"$ROOT/subtitle-install/include" tools/verify_runtime.c \
+          gcc -O2 -Wall -Wextra -I"$ROOT/install/include" -I"$ROOT/subtitle-install/include" -I"$ROOT/disc-install/include" tools/verify_runtime.c \
             "$ROOT/package/libavformat.so.63" \
             "$ROOT/package/libavcodec.so.63" \
             "$ROOT/package/libavutil.so.61" \

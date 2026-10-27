@@ -14,6 +14,7 @@
 #include "libswscale/swscale.h"
 #include "verify_av3a.h"
 #include "verify_subtitles.h"
+#include "verify_discs.h"
 
 typedef struct SeenPacket {
     int64_t pos;
@@ -146,6 +147,8 @@ int main(int argc, char **argv)
             return 1;
         }
     }
+    if (verify_discs())
+        return 1;
     if (verify_subtitles())
         return 1;
     if (verify_av3a())

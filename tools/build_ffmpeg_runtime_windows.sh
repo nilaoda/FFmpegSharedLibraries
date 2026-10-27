@@ -49,6 +49,8 @@ FFMPEG_AV3A_METADATA_PATCH_PATH="$REPO_ROOT/patches/ffmpeg/0006-av3a-stream-meta
 FFMPEG_DAVS2_COLOR_PATCH_PATH="$REPO_ROOT/patches/ffmpeg/0004-libdavs2-export-sequence-display-color-metadata.patch"
 FFMPEG_LIBASS_EMBED_PATCH_PATH="$REPO_ROOT/patches/ffmpeg/0005-embed-libass-in-avfilter.patch"
 SUBTITLE_INSTALL_ROOT="$WORK_ROOT/subtitle-install"
+DISC_INSTALL_ROOT="$WORK_ROOT/disc-install"
+FFMPEG_DISC_EMBED_PATCH_PATH="$REPO_ROOT/patches/ffmpeg/0007-embed-disc-libraries-in-avformat.patch"
 INSTALL_ROOT="$WORK_ROOT/install"
 PACKAGE_ROOT="$WORK_ROOT/package"
 RUNTIME_ROOT="$PACKAGE_ROOT"
@@ -164,6 +166,8 @@ if [[ "$LICENSE_FLAVOR" == "gpl" ]]; then
 fi
 patch -d "$SOURCE_DIR" -p1 --batch --forward --fuzz=0 --dry-run <"$FFMPEG_LIBASS_EMBED_PATCH_PATH" >/dev/null
 patch -d "$SOURCE_DIR" -p1 --batch --forward --fuzz=0 <"$FFMPEG_LIBASS_EMBED_PATCH_PATH"
+patch -d "$SOURCE_DIR" -p1 --batch --forward --fuzz=0 --dry-run <"$FFMPEG_DISC_EMBED_PATCH_PATH" >/dev/null
+patch -d "$SOURCE_DIR" -p1 --batch --forward --fuzz=0 <"$FFMPEG_DISC_EMBED_PATCH_PATH"
 # 声道床和对象分别写入轨道元数据，保留原生总通道数。
 patch -d "$SOURCE_DIR" -p1 --batch --forward --fuzz=0 --dry-run <"$FFMPEG_AV3A_METADATA_PATCH_PATH" >/dev/null
 patch -d "$SOURCE_DIR" -p1 --batch --forward --fuzz=0 <"$FFMPEG_AV3A_METADATA_PATCH_PATH"
@@ -298,8 +302,10 @@ fi
 # 将 libass 及字体、排版依赖静态合入 avfilter，并导出字幕公开接口。
 PKG_CONFIG_BIN="$PKG_CONFIG_BIN" bash "$SCRIPT_DIR/build_subtitle_runtime.sh" windows "$WORK_ROOT" "$CPU_COUNT"
 bash "$SCRIPT_DIR/embed_libass.sh" "$SOURCE_DIR" "$SUBTITLE_INSTALL_ROOT"
+PKG_CONFIG_BIN="$PKG_CONFIG_BIN" bash "$SCRIPT_DIR/build_disc_runtime.sh" windows "$LICENSE_FLAVOR" "$WORK_ROOT" "$CPU_COUNT"
+bash "$SCRIPT_DIR/embed_discs.sh" "$SOURCE_DIR" "$DISC_INSTALL_ROOT" "$LICENSE_FLAVOR"
 
-PKG_CONFIG_PATH_ENTRIES=("$UAVS3D_INSTALL_ROOT/lib/pkgconfig" "$SUBTITLE_INSTALL_ROOT/lib/pkgconfig")
+PKG_CONFIG_PATH_ENTRIES=("$UAVS3D_INSTALL_ROOT/lib/pkgconfig" "$SUBTITLE_INSTALL_ROOT/lib/pkgconfig" "$DISC_INSTALL_ROOT/lib/pkgconfig")
 CPPFLAGS_ENTRIES=("-I$UAVS3D_INSTALL_ROOT/include")
 
 if [[ "$ENABLE_LIBDAVS2" == true ]]; then
@@ -331,6 +337,7 @@ CONFIGURE_FLAGS=(
   --disable-debug
   --disable-autodetect
   --enable-libass
+  --enable-libbluray
   --enable-filter=ass,subtitles
   --disable-ffplay
   --disable-network
@@ -346,7 +353,7 @@ CONFIGURE_FLAGS=(
 )
 
 if [[ "$LICENSE_FLAVOR" == "gpl" ]]; then
-  CONFIGURE_FLAGS+=(--enable-gpl --enable-version3)
+  CONFIGURE_FLAGS+=(--enable-gpl --enable-version3 --enable-libdvdread --enable-libdvdnav)
 fi
 
 CONFIGURE_FLAGS+=(--enable-libuavs3d)
@@ -405,6 +412,10 @@ done
 {
   echo "FFmpeg version: $FFMPEG_VERSION"
   echo "License flavor: $LICENSE_FLAVOR"
+  echo "Blu-ray dependencies (static): libbluray 1.5.0, libudfread 1.2.0"
+  if [[ "$LICENSE_FLAVOR" == gpl ]]; then
+    echo "DVD dependencies (static): libdvdread 7.1.1, libdvdnav 7.0.0, libdvdcss 1.6.0"
+  fi
   echo "Hardware decoding: D3D11VA, DXVA2"
   echo "Enable libuavs3d: true"
   echo "libuavs3d linkage: static"
