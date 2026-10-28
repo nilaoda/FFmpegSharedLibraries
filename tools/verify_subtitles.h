@@ -147,6 +147,28 @@ static int verify_subtitles(void)
     packet->duration = 2000;
     SUBTITLE_CHECK(avcodec_decode_subtitle2(decoder, &subtitle, &got, packet) >= 0 && got);
     SUBTITLE_CHECK(subtitle.num_rects > 0 && subtitle.rects[0]->ass && strstr(subtitle.rects[0]->ass, "Hello"));
+    /* Exercise both text encoders used by the muxer, including their ASS header. */
+    const enum AVCodecID encoders[] = { AV_CODEC_ID_ASS, AV_CODEC_ID_MOV_TEXT };
+    for (unsigned i = 0; i < sizeof(encoders) / sizeof(encoders[0]); i++) {
+        const AVCodec *codec = avcodec_find_encoder(encoders[i]);
+        SUBTITLE_CHECK(codec);
+        AVCodecContext *encoder = avcodec_alloc_context3(codec);
+        SUBTITLE_CHECK(encoder);
+        encoder->time_base = (AVRational){1, 1000000};
+        encoder->subtitle_header = av_mallocz(decoder->subtitle_header_size + 1);
+        SUBTITLE_CHECK(encoder->subtitle_header);
+        memcpy(encoder->subtitle_header, decoder->subtitle_header, decoder->subtitle_header_size);
+        encoder->subtitle_header_size = decoder->subtitle_header_size;
+        SUBTITLE_CHECK(avcodec_open2(encoder, NULL, NULL) >= 0);
+        unsigned char encoded[4096];
+        int size = avcodec_encode_subtitle(encoder, encoded, sizeof(encoded), &subtitle);
+        SUBTITLE_CHECK(size > 0);
+        if (encoders[i] == AV_CODEC_ID_MOV_TEXT)
+            SUBTITLE_CHECK(size >= 7 && !memcmp(encoded, "\0\5Hello", 7));
+        else
+            SUBTITLE_CHECK(strstr((char *)encoded, "Hello"));
+        avcodec_free_context(&encoder);
+    }
     avsubtitle_free(&subtitle);
     av_packet_free(&packet);
     avcodec_free_context(&decoder);

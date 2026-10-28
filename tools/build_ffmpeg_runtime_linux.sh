@@ -298,7 +298,7 @@ CONFIGURE_FLAGS=(
   --disable-outdevs
   --disable-devices
   --disable-encoders
-  --enable-encoder=png,mjpeg,bmp
+  --enable-encoder=png,mjpeg,bmp,ass,movtext
   --extra-ldflags=-static-libgcc
 )
 

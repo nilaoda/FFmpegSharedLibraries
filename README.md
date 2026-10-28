@@ -93,7 +93,8 @@ signature after rewriting, so ARM64 libraries can load from the flat package.
 
 FFmpeg provides text subtitle decoding (including MP4 mov_text, SRT, SSA/ASS and
 WebVTT) and bitmap subtitle decoding (PGS, DVB and DVD), plus CEA-608 captions.
-The `ass` and `subtitles` filters are enabled.
+The `ass` and `mov_text` subtitle encoders are enabled for text subtitle
+conversion during muxing. The `ass` and `subtitles` filters are enabled.
 
 Applications can call the `ass_*` API exported by libavfilter to render SSA/ASS as transparent
 bitmap overlays, including styling, animation and complex text shaping. Decoded
