@@ -14117,7 +14117,7 @@ new file mode 100644
 index 0000000..673a269
 --- /dev/null
 +++ b/libavcodec/libcavs.c
-@@ -0,0 +1,18583 @@
+@@ -0,0 +1,18598 @@
 +#include "config.h"
 +#ifdef _WIN32
 +#define SYS_WINDOWS 1
@@ -14821,6 +14821,7 @@ index 0000000..673a269
 +	uint32_t   i_code_type;
 +    uint64_t packet_serial;
 +	uint32_t   b_top_field_first;
++    uint32_t   b_progressive_frame;
 +	uint32_t   i_ref_distance[2]; /* two ref-frames at most */
 +	uint32_t   b_picture_structure;
 +
@@ -16154,6 +16155,8 @@ index 0000000..673a269
 +    uint64_t packet_serial;
 +    uint64_t input_serial;
 +    uint64_t output_serial;
++    int output_interlaced;
++    int output_top_field_first;
 +
 +    int b_skip_first;
 +
@@ -18746,7 +18749,6 @@ index 0000000..673a269
 +    }
 +    sh->b_interlaced = !h->b_picture_structure;
 +    h->b_top_field_first = cavs_bitstream_get_bit1(s);
-+    h->b_top_field_first = !h->b_picture_structure; // FIXIT:not support 0
 +    h->b_repeat_first_field = cavs_bitstream_get_bit1(s);
 +    h->b_fixed_picture_qp = cavs_bitstream_get_bit1(s);
 +    h->i_picture_qp = cavs_bitstream_get_bits(s, 6);
@@ -18892,7 +18894,6 @@ index 0000000..673a269
 +    }
 +    sh->b_interlaced = !h->b_picture_structure;
 +    h->b_top_field_first = cavs_bitstream_get_bit1(s);
-+    h->b_top_field_first = !h->b_picture_structure;// FIXIT:not support 0
 +    h->b_repeat_first_field = cavs_bitstream_get_bit1(s);
 +    h->b_fixed_picture_qp = cavs_bitstream_get_bit1(s);
 +    h->i_picture_qp = cavs_bitstream_get_bits(s, 6);
@@ -22678,6 +22679,7 @@ index 0000000..673a269
 +
 +    p->p_save[0]->i_distance_index = p->ph.i_picture_distance*2;
 +    p->p_save[0]->b_top_field_first = p->ph.b_top_field_first;
++    p->p_save[0]->b_progressive_frame = p->ph.b_progressive_frame;
 +    p->p_save[0]->i_code_type = p->ph.i_picture_coding_type;
 +    p->p_save[0]->packet_serial = p->packet_serial;
 +
@@ -22772,6 +22774,7 @@ index 0000000..673a269
 +		return CAVS_ERROR;
 +    p->p_save_aec[0]->i_distance_index = p->ph.i_picture_distance*2;
 +    p->p_save_aec[0]->b_top_field_first = p->ph.b_top_field_first;
++    p->p_save_aec[0]->b_progressive_frame = p->ph.b_progressive_frame;
 +    p->p_save_aec[0]->i_code_type = p->ph.i_picture_coding_type;
 +    p->p_save_aec[0]->packet_serial = p->packet_serial;
 +
@@ -22829,6 +22832,7 @@ index 0000000..673a269
 +{
 +    p->p_save[0]->i_distance_index = p->ph.i_picture_distance*2;
 +    p->p_save[0]->b_top_field_first = p->ph.b_top_field_first;
++    p->p_save[0]->b_progressive_frame = p->ph.b_progressive_frame;
 +    p->p_save[0]->i_code_type = p->ph.i_picture_coding_type;
 +    p->p_save[0]->packet_serial = p->packet_serial;
 +    p->i_mb_x = p->i_mb_y = 0;
@@ -22842,6 +22846,7 @@ index 0000000..673a269
 +{
 +    p->p_save[0]->i_distance_index = p->ph.i_picture_distance*2;
 +    p->p_save[0]->b_top_field_first = p->ph.b_top_field_first;
++    p->p_save[0]->b_progressive_frame = p->ph.b_progressive_frame;
 +    p->p_save[0]->i_code_type = p->ph.i_picture_coding_type;
 +    p->p_save[0]->packet_serial = p->packet_serial;
 +    p->i_mb_x = p->i_mb_y = 0;
@@ -27658,6 +27663,9 @@ index 0000000..673a269
 +{
 +    uint32_t j = 0;
 +    p->output_serial = p_cur->packet_serial;
++    /* Field metadata belongs to the reconstructed picture, not the input packet. */
++    p->output_interlaced = !p_cur->b_progressive_frame;
++    p->output_top_field_first = p_cur->b_top_field_first;
 +    unsigned char* p_bufimg;
 +    uint8_t *p_yuv;
 +    int b_interlaced = p->param.b_interlaced;
@@ -32701,12 +32709,19 @@ index 0000000..673a269
 +{
 +    return ((cavs_decoder *)p_decoder)->output_serial;
 +}
++
++int cavs_decoder_output_field_info(void *p_decoder, int *top_field_first)
++{
++    cavs_decoder *p = p_decoder;
++    *top_field_first = p->output_top_field_first;
++    return p->output_interlaced;
++}
 diff --git a/libavcodec/libcavs.h b/libavcodec/libcavs.h
 new file mode 100644
 index 0000000..c7d4027
 --- /dev/null
 +++ b/libavcodec/libcavs.h
-@@ -0,0 +1,167 @@
+@@ -0,0 +1,168 @@
 +/*****************************************************************************
 +* libcavs.h: the header file of avs/avs+ decoder
 +*****************************************************************************
@@ -32798,6 +32813,7 @@ index 0000000..c7d4027
 +}cavs_param;
 +
 +uint64_t cavs_decoder_output_serial(void *p_decoder);
++int cavs_decoder_output_field_info(void *p_decoder, int *top_field_first);
 +
 +/* creat handle of decoder */
 +int cavs_decoder_create( void **pp_decoder, cavs_param *param );
@@ -32879,7 +32895,7 @@ new file mode 100644
 index 0000000..8c7b1a1
 --- /dev/null
 +++ b/libavcodec/libcavsdec.c
-@@ -0,0 +1,1001 @@
+@@ -0,0 +1,1007 @@
 +/*
 + * Chinese AVS video (AVS1-P2, JiZhun profile, frame and field) decoder.
 + * Chinese AVS video (AVS1-P16, GuanDian profile, frame and field) decoder.
@@ -32955,6 +32971,8 @@ index 0000000..8c7b1a1
 +    AVFrame *f;
 +    AVPacket pkt;
 +    int poc;
++    int interlaced;
++    int top_field_first;
 +} AVSFrame;
 +
 +typedef struct AVSContext {
@@ -33144,6 +33162,7 @@ index 0000000..8c7b1a1
 +        av_log(h->avctx, AV_LOG_ERROR, "CAVS output packet properties expired\n");
 +        return AVERROR_INVALIDDATA;
 +    }
++    frame->interlaced = cavs_decoder_output_field_info(h->p_decoder, &frame->top_field_first);
 +    return cavs_set_frame_packet(frame, &h->packet_props[slot]);
 +}
 +
@@ -33178,11 +33197,14 @@ index 0000000..8c7b1a1
 +            return ret;
 +    }
 +
-+    frame->flags &= ~(AV_FRAME_FLAG_KEY | AV_FRAME_FLAG_INTERLACED);
++    frame->flags &= ~(AV_FRAME_FLAG_KEY | AV_FRAME_FLAG_INTERLACED | AV_FRAME_FLAG_TOP_FIELD_FIRST);
 +    if (frame->pict_type == AV_PICTURE_TYPE_I)
 +        frame->flags |= AV_FRAME_FLAG_KEY;
-+    if (h->b_interlaced)
++    if (src->interlaced) {
 +        frame->flags |= AV_FRAME_FLAG_INTERLACED;
++        if (src->top_field_first)
++            frame->flags |= AV_FRAME_FLAG_TOP_FIELD_FIRST;
++    }
 +
 +    pts = frame->pts;
 +    if (pts == AV_NOPTS_VALUE)

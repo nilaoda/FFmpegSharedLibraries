@@ -39,13 +39,13 @@ DAVS2_BUILD_DIR="$DAVS2_SOURCE_DIR/build"
 DAVS2_INSTALL_ROOT="$WORK_ROOT/davs2-install"
 DAVS2_PATCH_PATH="$REPO_ROOT/patches/davs2-10bit/0001-enable-10bit-build-and-propagate-frame-packet-position.patch"
 DAVS2_COMPAT_PATCH_PATH="$REPO_ROOT/patches/davs2-10bit/0002-x86-build-avx-codepaths-as-dispatch-only.patch"
-DAVS2_DPB_FIX_PATCH_PATH="$REPO_ROOT/patches/davs2-10bit/0003-fix-dpb-stale-ref-frames.patch"
 DAVS2_COLOR_PATCH_PATH="$REPO_ROOT/patches/davs2-10bit/0004-export-sequence-display-color-description.patch"
 FFMPEG_RUNTIME_PATCH_PATH="$REPO_ROOT/patches/ffmpeg/0001-avs-dra-runtime.patch"
 FFMPEG_AV3A_PATCH_PATH="$REPO_ROOT/patches/ffmpeg/0002-av3a-demux-probing.patch"
 FFMPEG_AV3A_CONTAINER_PATCH_PATH="$REPO_ROOT/patches/ffmpeg/0003-av3a-container-remux.patch"
 FFMPEG_AV3A_METADATA_PATCH_PATH="$REPO_ROOT/patches/ffmpeg/0006-av3a-stream-metadata.patch"
 FFMPEG_DAVS2_COLOR_PATCH_PATH="$REPO_ROOT/patches/ffmpeg/0004-libdavs2-export-sequence-display-color-metadata.patch"
+FFMPEG_DAVS2_RESET_PATCH_PATH="$REPO_ROOT/patches/ffmpeg/0008-libdavs2-reset-reference-state-on-seek.patch"
 FFMPEG_LIBASS_EMBED_PATCH_PATH="$REPO_ROOT/patches/ffmpeg/0005-embed-libass-in-avfilter.patch"
 SUBTITLE_INSTALL_ROOT="$WORK_ROOT/subtitle-install"
 DISC_INSTALL_ROOT="$WORK_ROOT/disc-install"
@@ -105,6 +105,8 @@ patch -d "$SOURCE_DIR" -p1 --batch --forward --fuzz=0 <"$FFMPEG_AV3A_CONTAINER_P
 if [[ "$LICENSE_FLAVOR" == "gpl" ]]; then
   patch -d "$SOURCE_DIR" -p1 --batch --forward --fuzz=0 --dry-run <"$FFMPEG_DAVS2_COLOR_PATCH_PATH" >/dev/null
   patch -d "$SOURCE_DIR" -p1 --batch --forward --fuzz=0 <"$FFMPEG_DAVS2_COLOR_PATCH_PATH"
+  patch -d "$SOURCE_DIR" -p1 --batch --forward --fuzz=0 --dry-run <"$FFMPEG_DAVS2_RESET_PATCH_PATH" >/dev/null
+  patch -d "$SOURCE_DIR" -p1 --batch --forward --fuzz=0 <"$FFMPEG_DAVS2_RESET_PATCH_PATH"
 fi
 patch -d "$SOURCE_DIR" -p1 --batch --forward --fuzz=0 --dry-run <"$FFMPEG_LIBASS_EMBED_PATCH_PATH" >/dev/null
 patch -d "$SOURCE_DIR" -p1 --batch --forward --fuzz=0 <"$FFMPEG_LIBASS_EMBED_PATCH_PATH"
@@ -167,7 +169,13 @@ if [[ "$LICENSE_FLAVOR" == "gpl" ]]; then
   git -C "$DAVS2_SOURCE_DIR" fetch --depth 1 origin "$DAVS2_GIT_REF"
   git -C "$DAVS2_SOURCE_DIR" checkout --detach FETCH_HEAD
 
-  for davs2_patch_path in "$DAVS2_PATCH_PATH" "$DAVS2_COMPAT_PATCH_PATH" "$DAVS2_DPB_FIX_PATCH_PATH" "$DAVS2_COLOR_PATCH_PATH"; do
+  # Apple Silicon NEON primitives; other targets retain their existing patch set.
+  DAVS2_PATCHES=("$DAVS2_PATCH_PATH" "$DAVS2_COMPAT_PATCH_PATH")
+  for davs2_arm_patch in "$REPO_ROOT"/patches/davs2-10bit/aarch64/*.patch; do
+    DAVS2_PATCHES+=("$davs2_arm_patch")
+  done
+  DAVS2_PATCHES+=("$DAVS2_COLOR_PATCH_PATH")
+  for davs2_patch_path in "${DAVS2_PATCHES[@]}"; do
     if [[ ! -f "$davs2_patch_path" ]]; then
       echo "Missing davs2 patch file: $davs2_patch_path" >&2
       exit 1
@@ -203,7 +211,8 @@ if [[ "$LICENSE_FLAVOR" == "gpl" ]]; then
     --prefix="$DAVS2_INSTALL_ROOT" \
     --disable-cli \
     --enable-pic \
-    --bit-depth=10; then
+    --bit-depth=10 \
+    --extra-cflags="-mcpu=apple-m1 -fvectorize -fslp-vectorize"; then
     if [[ -f config.log ]]; then
       echo "===== davs2 config.log (tail 400) =====" >&2
       tail -n 400 config.log >&2
@@ -367,6 +376,8 @@ done
     echo "libdavs2 linkage: static"
     echo "libdavs2 revision: $DAVS2_GIT_REF"
     echo "libdavs2 bit depth: 10"
+    echo "libdavs2 SIMD: AArch64 NEON (Apple M1 baseline)"
+    echo "libdavs2 reference management: upstream DPB lifetime rules"
   fi
   cat "$SUBTITLE_INSTALL_ROOT/versions.txt"
   echo "Built on: $(date -u +"%Y-%m-%dT%H:%M:%SZ")"

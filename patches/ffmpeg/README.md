@@ -20,6 +20,9 @@ Changes for FFmpeg 9:
   without retaining compressed payloads. Frame reordering, drain and seek use
   the originating properties, including `AV_CODEC_FLAG_COPY_OPAQUE`. An expired
   history entry returns an error rather than assigning a different packet.
+- Preserve each reconstructed CAVS picture's progressive/interlaced and field-order
+  flags through output reordering. Respect the signalled top/bottom field order
+  instead of overwriting it, so downstream deinterlacers process the right field first.
 - Probe CAVS directly from the input buffer without a temporary packet copy;
   remove redundant B-frame pixel copies and duplicate packet-property storage.
   Propagate invalid sequence-header errors to the caller.
@@ -164,3 +167,15 @@ libbluray, libudfread, libdvdread, libdvdnav and libdvdcss; LGPL builds include 
 libbluray and libudfread. Only the seven FFmpeg shared libraries are packaged.
 The runtime verifier links the required disc APIs through libavformat and
 checks DVD input and VOB/PGS subtitle decoder availability.
+
+## AVS2 seek reset
+
+`0008-libdavs2-reset-reference-state-on-seek.patch` applies after `0004` in GPL
+builds. The native `davs2_decoder_flush` API drains delayed pictures without
+resetting reference-picture reservations. FFmpeg's explicit buffer flush after
+a seek must discard that state, so this patch recreates the davs2 decoder while
+retaining its thread configuration and resetting timestamp/provenance metadata.
+EOF output continues through the separate delayed-frame drain path.
+
+The dependency retains upstream DPB allocation rules. A reference with no active
+worker can still be required by a later picture and must not be recycled early.

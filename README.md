@@ -25,11 +25,18 @@ The build downloads third-party sources into the workflow temp work root (`$RUNN
 - `patches/davs2-10bit/0002-x86-build-avx-codepaths-as-dispatch-only.patch`
   - keeps generic `x86_64` objects on an SSE4.x baseline instead of compiling the whole library with `-mavx`,
   - builds AVX and AVX2 translation units separately so runtime CPUID dispatch stays compatible with both older and newer x86 devices.
-- `patches/davs2-10bit/0003-fix-dpb-stale-ref-frames.patch`
-  - fixes a hang in the DPB (decoded picture buffer) allocation loop that can occur with certain AVS2 streams,
-  - recycles stale reference frames that have `b_refered_by_others==1 && i_ref_count==0` (zombie frames never cleaned by the RPS) instead of blocking the pipeline forever.
 - [`patches/davs2-10bit/0004-export-sequence-display-color-description.patch`](./patches/davs2-10bit/0004-export-sequence-display-color-description.patch)
   - reads AVS2 sequence-display range and color descriptions and returns the header belonging to each decoded frame.
+- `patches/davs2-10bit/aarch64/*.patch`
+  - enables AArch64 NEON detection, pixel operations, motion compensation, deblocking and intra prediction for macOS arm64 builds,
+  - preserves compiler vectorization and targets the Apple M1 baseline rather than the build machine's CPU.
+
+Reference pictures follow the upstream DPB lifetime rules. A zero `i_ref_count` only
+means no active worker holds the picture; `b_refered_by_others` can still reserve it
+for later frames. Recycling such pictures early corrupts valid long-reference GOPs.
+The FFmpeg AVS2 reset patch recreates the native decoder on an explicit buffer
+flush, clearing DPB/RPS state after seeks while keeping EOF draining separate.
+
 - [`patches/ffmpeg/0001-avs-dra-runtime.patch`](./patches/ffmpeg/0001-avs-dra-runtime.patch)
   - vendors the existing native AVS+/DRA decoders and ports their integration to FFmpeg 9,
   - preserves the upstream 9.x CAVS parser's sequence-header parsing,

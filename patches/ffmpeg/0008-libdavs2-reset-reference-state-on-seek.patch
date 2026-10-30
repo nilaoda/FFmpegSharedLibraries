@@ -1,0 +1,59 @@
+--- a/libavcodec/libdavs2.c
++++ b/libavcodec/libdavs2.c
+@@ -276,20 +276,24 @@
+ 
+ static void davs2_flush(AVCodecContext *avctx)
+ {
+-    DAVS2Context *cad      = avctx->priv_data;
+-    int           ret      = DAVS2_GOT_FRAME;
+-
+-    while (ret == DAVS2_GOT_FRAME) {
+-        ret = davs2_decoder_flush(cad->decoder, &cad->headerset, &cad->out_frame);
+-        davs2_decoder_frame_unref(cad->decoder, &cad->out_frame);
+-    }
+-
+-    if (ret == DAVS2_ERROR) {
+-        av_log(avctx, AV_LOG_WARNING, "Decoder flushing failed.\n");
+-    }
+-
++    DAVS2Context *cad = avctx->priv_data;
++
++    /* davs2_decoder_flush drains delayed pictures but keeps DPB/RPS state.
++     * avcodec_flush_buffers means discard and reset (e.g. after a seek).
++     * A fresh decoder prevents old reference reservations from exhausting
++     * the DPB when a sequence is read again. EOF draining stays separate. */
++    if (cad->decoder)
++        davs2_decoder_close(cad->decoder);
++    cad->decoder = NULL;
++    memset(&cad->packet, 0, sizeof(cad->packet));
++    memset(&cad->out_frame, 0, sizeof(cad->out_frame));
++    memset(&cad->headerset, 0, sizeof(cad->headerset));
+     cad->last_output_pts = AV_NOPTS_VALUE;
+     cad->last_packet_pos = -1;
++    davs2_set_color_metadata(avctx, NULL, &cad->headerset);
++    cad->decoder = davs2_decoder_open(&cad->param);
++    if (!cad->decoder)
++        av_log(avctx, AV_LOG_ERROR, "Could not reset the AVS2 decoder after flushing.\n");
+ }
+ 
+ static int send_delayed_frame(AVCodecContext *avctx, AVFrame *frame, int *got_frame)
+@@ -315,7 +319,6 @@
+ 
+     /* close the decoder */
+     if (cad->decoder) {
+-        davs2_flush(avctx);
+         davs2_decoder_close(cad->decoder);
+         cad->decoder = NULL;
+     }
+@@ -330,6 +333,11 @@
+     int           buf_size = avpkt->size;
+     const uint8_t *buf_ptr = avpkt->data;
+     int           ret      = DAVS2_DEFAULT;
++
++    if (!cad->decoder) {
++        *got_frame = 0;
++        return AVERROR_EXTERNAL;
++    }
+ 
+     /* end of stream, output what is still in the buffers */
+     if (!buf_size) {
