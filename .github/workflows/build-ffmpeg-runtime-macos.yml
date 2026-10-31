@@ -7,11 +7,12 @@ env:
   FFMPEG_VERSION: "9.0.2"
   LICENSE_FLAVOR: "gpl"
   WORK_ROOT_DIR: ffmpeg-runtime-build
+  MACOSX_DEPLOYMENT_TARGET: "14.0"
 
 jobs:
   build-osx-arm64-runtime:
     name: Build FFmpeg Runtime [osx-arm64]
-    runs-on: macos-14
+    runs-on: macos-15
 
     steps:
       - uses: actions/checkout@v4

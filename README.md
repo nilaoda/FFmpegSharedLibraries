@@ -4,7 +4,7 @@ GitHub Actions workflows for building FFmpeg shared-library runtimes with subtit
 
 ## Outputs
 
-- `macos-14`: arm64 `.dylib`
+- `macos-15`: arm64 `.dylib`
 - `windows-latest`: win64 `.dll`
 - `ubuntu-latest`: linux x64 `.so`
 
@@ -14,7 +14,7 @@ Each runtime contains seven FFmpeg shared libraries. libass is linked statically
 - `libdavs2` (`davs2-10bit`) is built from source and linked statically when `license_flavor=gpl`.
 - Runtime artifacts do not include separate `libuavs3d`/`libdavs2` dynamic libraries.
 - libass, FreeType, HarfBuzz, FriBidi and libunibreak are linked statically into libavfilter. Linux also statically includes Fontconfig and Expat. These dependencies do not add separate runtime libraries.
-- The macOS runtime enables VideoToolbox hardware decoding.
+- The macOS runtime enables VideoToolbox hardware decoding and targets macOS 14.0 or later, independently of the runner version.
 - The Windows runtime enables D3D11VA and DXVA2 hardware decoding through Windows system APIs without additional runtime DLLs.
 
 The build downloads third-party sources into the workflow temp work root (`$RUNNER_TEMP/ffmpeg-runtime-build` in GitHub Actions) and applies a small set of local patches across both `davs2-10bit` and FFmpeg:
@@ -27,9 +27,15 @@ The build downloads third-party sources into the workflow temp work root (`$RUNN
   - builds AVX and AVX2 translation units separately so runtime CPUID dispatch stays compatible with both older and newer x86 devices.
 - [`patches/davs2-10bit/0004-export-sequence-display-color-description.patch`](./patches/davs2-10bit/0004-export-sequence-display-color-description.patch)
   - reads AVS2 sequence-display range and color descriptions and returns the header belonging to each decoded frame.
+- [`patches/davs2-10bit/0005-x86-10bit-motion-compensation.patch`](./patches/davs2-10bit/0005-x86-10bit-motion-compensation.patch)
+  - enables GCC tree vectorization for the 10-bit motion-compensation translation unit on `x86_64` while keeping the generic SSE4.x baseline and the global `-fno-tree-vectorize` policy for every other object,
+  - adds AVX2 luma and chroma interpolation kernels for 10-bit AVS2 and selects them through the existing runtime CPUID dispatch,
+  - preserves the existing scalar motion-compensation fallback for CPUs without AVX2.
 - `patches/davs2-10bit/aarch64/*.patch`
   - enables AArch64 NEON detection, pixel operations, motion compensation, deblocking and intra prediction for macOS arm64 builds,
   - preserves compiler vectorization and targets the Apple M1 baseline rather than the build machine's CPU.
+
+The x86 optimisation patch is applied by the Linux and Windows x86_64 build scripts; macOS arm64 builds do not apply it.
 
 Reference pictures follow the upstream DPB lifetime rules. A zero `i_ref_count` only
 means no active worker holds the picture; `b_refered_by_others` can still reserve it

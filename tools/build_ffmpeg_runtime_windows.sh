@@ -41,6 +41,7 @@ DAVS2_INSTALL_ROOT="$WORK_ROOT/davs2-install"
 DAVS2_PATCH_PATH="$REPO_ROOT/patches/davs2-10bit/0001-enable-10bit-build-and-propagate-frame-packet-position.patch"
 DAVS2_COMPAT_PATCH_PATH="$REPO_ROOT/patches/davs2-10bit/0002-x86-build-avx-codepaths-as-dispatch-only.patch"
 DAVS2_COLOR_PATCH_PATH="$REPO_ROOT/patches/davs2-10bit/0004-export-sequence-display-color-description.patch"
+DAVS2_MC_PATCH_PATH="$REPO_ROOT/patches/davs2-10bit/0005-x86-10bit-motion-compensation.patch"
 FFMPEG_RUNTIME_PATCH_PATH="$REPO_ROOT/patches/ffmpeg/0001-avs-dra-runtime.patch"
 FFMPEG_AV3A_PATCH_PATH="$REPO_ROOT/patches/ffmpeg/0002-av3a-demux-probing.patch"
 FFMPEG_AV3A_CONTAINER_PATCH_PATH="$REPO_ROOT/patches/ffmpeg/0003-av3a-container-remux.patch"
@@ -228,7 +229,7 @@ if [[ "$LICENSE_FLAVOR" == "gpl" ]]; then
   git -C "$DAVS2_SOURCE_DIR" config core.autocrlf false
   git -C "$DAVS2_SOURCE_DIR" checkout --detach FETCH_HEAD
 
-  for davs2_patch_path in "$DAVS2_PATCH_PATH" "$DAVS2_COMPAT_PATCH_PATH" "$DAVS2_COLOR_PATCH_PATH"; do
+  for davs2_patch_path in "$DAVS2_PATCH_PATH" "$DAVS2_COMPAT_PATCH_PATH" "$DAVS2_COLOR_PATCH_PATH" "$DAVS2_MC_PATCH_PATH"; do
     if [[ ! -f "$davs2_patch_path" ]]; then
       echo "Missing davs2 patch file: $davs2_patch_path" >&2
       exit 1
