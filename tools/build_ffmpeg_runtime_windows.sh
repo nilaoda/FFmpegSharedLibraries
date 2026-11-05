@@ -103,9 +103,8 @@ SYSTEM_DLL_PATTERNS=(
   EXT-MS-WIN-*.DLL
 )
 
-# FFmpeg 9's LINK macro removes standalone -lstdc++ and appends it through
-# g++. Keep the complete static group in one linker argument so libstdc++
-# precedes winpthread even when FFmpeg selects the C++ driver.
+# FFmpeg 会把单独的 -lstdc++ 移交给 g++ 驱动；将静态库组保持为一个链接参数，
+# 保证切换驱动后仍按 C++ 运行时、线程库的顺序解析引用。
 STATIC_CXX_LIBS="-Wl,-Bstatic,-lstdc++,-lwinpthread,-Bdynamic"
 
 dll_dependencies() {
@@ -127,24 +126,27 @@ is_system_dll() {
 
 mkdir -p "$SOURCE_ROOT" "$INSTALL_ROOT" "$RUNTIME_ROOT" "$ARTIFACT_ROOT"
 
-# Exercise real C++/pthread references before building the decoder libraries.
-# Check both drivers: FFmpeg uses gcc normally and g++ for C++ filters.
-g++ -O2 -c "$SCRIPT_DIR/verify_windows_linkage.cpp" -o "$WORK_ROOT/linkage-probe.o"
-for driver in gcc g++; do
-  "$driver" -static-libgcc -static-libstdc++ "$WORK_ROOT/linkage-probe.o" \
-    "$STATIC_CXX_LIBS" -o "$WORK_ROOT/linkage-probe.exe"
-  objdump -p "$WORK_ROOT/linkage-probe.exe" > "$WORK_ROOT/linkage-probe.imports.txt"
-  while IFS= read -r dependency; do
-    dependency_upper="$(printf '%s' "$dependency" | tr '[:lower:]' '[:upper:]')"
-    if ! is_system_dll "$dependency_upper"; then
-      cat "$WORK_ROOT/linkage-probe.imports.txt" >&2
-      echo "Unexpected $driver runtime dependency: $dependency" >&2
-      exit 1
-    fi
-  done < <(dll_dependencies "$WORK_ROOT/linkage-probe.exe")
-  "$WORK_ROOT/linkage-probe.exe"
-done
-rm -f "$WORK_ROOT/linkage-probe.o" "$WORK_ROOT/linkage-probe.exe" "$WORK_ROOT/linkage-probe.imports.txt"
+# 同时检查直接 pthread 调用与 C++ 线程引用，禁止混入动态线程或 C++ 运行库。
+verify_static_linkage() {
+  local driver dependency dependency_upper
+  g++ -O2 -c "$SCRIPT_DIR/verify_windows_linkage.cpp" -o "$WORK_ROOT/linkage-probe.o"
+  for driver in gcc g++; do
+    "$driver" -static-libgcc -static-libstdc++ "$WORK_ROOT/linkage-probe.o" \
+      "$@" "$STATIC_CXX_LIBS" -o "$WORK_ROOT/linkage-probe.exe"
+    objdump -p "$WORK_ROOT/linkage-probe.exe" > "$WORK_ROOT/linkage-probe.imports.txt"
+    while IFS= read -r dependency; do
+      dependency_upper="$(printf '%s' "$dependency" | tr '[:lower:]' '[:upper:]')"
+      if ! is_system_dll "$dependency_upper"; then
+        cat "$WORK_ROOT/linkage-probe.imports.txt" >&2
+        echo "Unexpected $driver runtime dependency: $dependency" >&2
+        exit 1
+      fi
+    done < <(dll_dependencies "$WORK_ROOT/linkage-probe.exe")
+    "$WORK_ROOT/linkage-probe.exe"
+  done
+  rm -f "$WORK_ROOT/linkage-probe.o" "$WORK_ROOT/linkage-probe.exe" "$WORK_ROOT/linkage-probe.imports.txt"
+}
+verify_static_linkage
 
 if [[ ! -f "$SOURCE_ARCHIVE" ]]; then
   curl -fL --retry 3 "$SOURCE_URL" -o "$SOURCE_ARCHIVE"
@@ -323,6 +325,17 @@ fi
 export PKG_CONFIG_PATH="$(IFS=:; echo "${PKG_CONFIG_PATH_ENTRIES[*]}")${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
 export CPPFLAGS="${CPPFLAGS_ENTRIES[*]}${CPPFLAGS:+ $CPPFLAGS}"
 export LDFLAGS="-L$ENCODER_INSTALL_ROOT/lib${LDFLAGS:+ $LDFLAGS}"
+
+# 统一处理所有依赖的线程链接参数，避免新编码库的 -lpthread 抢先引入导入库。
+export FFMPEG_PKG_CONFIG_BIN="$PKG_CONFIG_BIN"
+PKG_CONFIG_BIN="$SCRIPT_DIR/pkg_config_windows_static.sh"
+ENCODER_LINK_PACKAGES=(vpx aom SvtAv1Enc)
+if [[ "$LICENSE_FLAVOR" == gpl ]]; then
+  ENCODER_LINK_PACKAGES+=(x264 x265)
+fi
+encoder_link_options="$("$PKG_CONFIG_BIN" --static --libs "${ENCODER_LINK_PACKAGES[@]}")"
+read -r -a encoder_link_flags <<< "$encoder_link_options"
+verify_static_linkage "${encoder_link_flags[@]}"
 
 pushd "$SOURCE_DIR" >/dev/null
 

@@ -208,8 +208,11 @@ No external samples or audio output device are needed.
 The Windows build first checks static C++/pthread linkage with both GCC drivers
 using `tools/verify_windows_linkage.cpp`, including a thread and an exception.
 The complete static library group is passed as one linker argument so FFmpeg
-9's C++ driver selection cannot reorder the runtime libraries. Packaged DLLs
-must still pass the final dependency check.
+9's C++ driver selection cannot reorder the runtime libraries. Windows pkg-config
+link flags explicitly select the static winpthread archive, preventing encoder
+dependencies from mixing pthread DLL import libraries with the static runtime.
+The linkage probe runs again with the encoder dependency flags before FFmpeg
+compilation. Packaged DLLs must still pass the final dependency check.
 
 The verifier also accepts a local sample. It decodes a bounded window, checks
 packet position metadata and key-packet provenance, then seeks, flushes and
