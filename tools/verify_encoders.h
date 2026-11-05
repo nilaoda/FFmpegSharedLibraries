@@ -240,19 +240,22 @@ end:
 static int verify_encoders(void)
 {
     const char *required[] = {
-        "mjpeg", "bmp", "tiff", "gif", "ass", "mov_text", "srt", "webvtt", "dvbsub", "dvdsub",
+        "mjpeg", "bmp", "tiff", "gif", "ass", "mov_text", "subrip", "webvtt", "dvbsub", "dvdsub",
         "mpeg1video", "mpeg2video", "mpeg4", "ffv1", "huffyuv", "ffvhuff", "utvideo", "prores_ks", "dnxhd", "rawvideo",
         "aac", "ac3", "ac3_fixed", "eac3", "mp2", "mp2fixed", "alac", "flac", "wavpack", "tta",
         "pcm_s8", "pcm_u8", "pcm_s16le", "pcm_s16be", "pcm_s24le", "pcm_s24be", "pcm_s32le", "pcm_s32be",
         "pcm_f32le", "pcm_f32be", "pcm_f64le", "pcm_f64be", "pcm_alaw", "pcm_mulaw",
         "libmp3lame", "libopus", "libvorbis", "libvpx", "libvpx-vp9", "libaom-av1", "libsvtav1", "libx264", "libx264rgb", "libx265"
     };
+    int failed = 0;
     for (unsigned i = 0; i < sizeof(required) / sizeof(required[0]); ++i) {
         if (!avcodec_find_encoder_by_name(required[i])) {
             fprintf(stderr, "Missing software encoder: %s\n", required[i]);
-            return 1;
+            failed = 1;
         }
     }
+    if (failed)
+        return 1;
     const struct {
         const char *name;
         enum AVPixelFormat format;
@@ -269,11 +272,9 @@ static int verify_encoders(void)
     };
     const char *audio[] = {"aac", "libmp3lame", "libopus", "libvorbis", "flac"};
     for (unsigned i = 0; i < sizeof(videos) / sizeof(videos[0]); ++i)
-        if (verify_video_encoder(videos[i].name, videos[i].format, videos[i].depth, videos[i].field_order))
-            return 1;
+        failed |= verify_video_encoder(videos[i].name, videos[i].format, videos[i].depth, videos[i].field_order);
     for (unsigned i = 0; i < sizeof(audio) / sizeof(audio[0]); ++i)
-        if (verify_audio_encoder(audio[i]))
-            return 1;
-    return 0;
+        failed |= verify_audio_encoder(audio[i]);
+    return failed;
 }
 #endif
