@@ -88,7 +88,7 @@ spliced into every source bitstream.
 | Lossless and intermediate video | FFV1, HuffYUV/FFVHuff, Ut Video, ProRes, DNxHD/DNxHR and raw video |
 | Compressed audio | AAC, AC-3/E-AC-3, MP2, MP3 through LAME, Opus and Vorbis |
 | Lossless audio | FLAC, ALAC, WavPack, TTA and common integer/float PCM formats in both byte orders |
-| Images and subtitles | PNG, MJPEG, BMP, TIFF, GIF, APNG, ASS, mov_text, SRT, WebVTT, DVB and DVD subtitles |
+| Images and subtitles | MJPEG, BMP, TIFF, GIF, ASS, mov_text, SRT, WebVTT, DVB and DVD subtitles |
 
 `tools/build_encoder_runtime.sh` builds pinned, SHA-256-checked static sources:
 
@@ -97,7 +97,8 @@ spliced into every source bitstream.
 - libvpx: 1.17.0; libaom: 3.15.3; SVT-AV1: 4.3.0.
 - LAME: 3.100; Opus: 1.6.1; libogg: 1.3.6; libvorbis: 1.3.7.
 
-All three platform scripts consume the same generated FFmpeg encoder options.
+All three platform scripts consume the same generated FFmpeg encoder options
+and check that every requested encoder is enabled before compilation.
 The dependencies are linked into avcodec and do not add separately packaged
 DLLs, dylibs or shared objects. Runtime manifests include the encoder list and
 source versions. Existing dependency checks still reject unexpected dynamic

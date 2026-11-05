@@ -113,7 +113,7 @@ encoder_source SVT-AV1-v4.3.0.tar.bz2 https://gitlab.com/AOMediaCodec/SVT-AV1/-/
 encoder_cmake "$ENCODER_SOURCE/SVT-AV1-v4.3.0" svt-av1 -DBUILD_APPS=OFF -DBUILD_TESTING=OFF \
   -DSVT_AV1_LTO=OFF -DNATIVE=OFF -DENABLE_SVE=OFF -DENABLE_SVE2=OFF
 
-SOFTWARE_ENCODERS="png,mjpeg,bmp,tiff,gif,apng,ass,movtext,subrip,webvtt,dvbsub,dvdsub"
+SOFTWARE_ENCODERS="mjpeg,bmp,tiff,gif,ass,movtext,subrip,webvtt,dvbsub,dvdsub"
 SOFTWARE_ENCODERS+=",mpeg1video,mpeg2video,mpeg4,ffv1,huffyuv,ffvhuff,utvideo,prores_ks,dnxhd,rawvideo"
 SOFTWARE_ENCODERS+=",aac,ac3,ac3_fixed,eac3,mp2,mp2fixed,alac,flac,wavpack,tta"
 SOFTWARE_ENCODERS+=",pcm_s8,pcm_u8,pcm_s16le,pcm_s16be,pcm_s24le,pcm_s24be,pcm_s32le,pcm_s32be"
@@ -186,6 +186,7 @@ if find "$ENCODER_PREFIX" -type f \( -name '*.dll' -o -name '*.dylib' -o -name '
 fi
 # 由三平台主脚本读取同一份配置，避免编码器白名单逐渐不一致。
 {
+  printf 'SOFTWARE_ENCODERS=%q\n' "$SOFTWARE_ENCODERS"
   printf 'SOFTWARE_ENCODER_FLAGS=('
   printf ' %q' "${SOFTWARE_ENCODER_FLAGS[@]}"
   printf ' )\n'

@@ -240,7 +240,7 @@ end:
 static int verify_encoders(void)
 {
     const char *required[] = {
-        "png", "mjpeg", "bmp", "tiff", "gif", "apng", "ass", "mov_text", "srt", "webvtt", "dvbsub", "dvdsub",
+        "mjpeg", "bmp", "tiff", "gif", "ass", "mov_text", "srt", "webvtt", "dvbsub", "dvdsub",
         "mpeg1video", "mpeg2video", "mpeg4", "ffv1", "huffyuv", "ffvhuff", "utvideo", "prores_ks", "dnxhd", "rawvideo",
         "aac", "ac3", "ac3_fixed", "eac3", "mp2", "mp2fixed", "alac", "flac", "wavpack", "tta",
         "pcm_s8", "pcm_u8", "pcm_s16le", "pcm_s16be", "pcm_s24le", "pcm_s24be", "pcm_s32le", "pcm_s32be",

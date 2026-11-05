@@ -326,6 +326,7 @@ if ! ./configure "${CONFIGURE_FLAGS[@]}"; then
   fi
   exit 1
 fi
+bash "$SCRIPT_DIR/verify_encoder_config.sh" config_components.h "$SOFTWARE_ENCODERS"
 make -j"$CPU_COUNT"
 make install
 

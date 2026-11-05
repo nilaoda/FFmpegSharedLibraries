@@ -416,6 +416,7 @@ for config_name in \
   require_config_enabled config_components.h "$config_name"
 done
 
+bash "$SCRIPT_DIR/verify_encoder_config.sh" config_components.h "$SOFTWARE_ENCODERS"
 make -j"$CPU_COUNT"
 make install
 
