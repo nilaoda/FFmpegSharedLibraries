@@ -15,6 +15,7 @@
 #include "verify_av3a.h"
 #include "verify_subtitles.h"
 #include "verify_discs.h"
+#include "verify_encoders.h"
 
 typedef struct SeenPacket {
     int64_t pos;
@@ -152,6 +153,8 @@ int main(int argc, char **argv)
     if (verify_subtitles())
         return 1;
     if (verify_av3a())
+        return 1;
+    if (verify_encoders())
         return 1;
     if (argc > 2 && !strcmp(argv[2], "av3a"))
         return verify_av3a_file(argv[1]);

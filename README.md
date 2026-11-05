@@ -1,6 +1,6 @@
 # FFmpegSharedLibraries
 
-GitHub Actions workflows for building FFmpeg shared-library runtimes with subtitle decoding and libass rendering, `libuavs3d` enabled, and `libdavs2` (from `davs2-10bit`) enabled in GPL builds.
+GitHub Actions workflows for building FFmpeg shared-library runtimes with software encoding, subtitle decoding and libass rendering, `libuavs3d` enabled, and `libdavs2` (from `davs2-10bit`) enabled in GPL builds.
 
 ## Outputs
 
@@ -71,6 +71,49 @@ flush, clearing DPB/RPS state after seeks while keeping EOF draining separate.
 
 See [`patches/ffmpeg/README.md`](./patches/ffmpeg/README.md) for source provenance,
 position metadata, allocation behavior and the decoder-specific opaque contract.
+
+## Software Encoding Support
+
+The runtime also provides software encoders for future frame-accurate boundary
+re-encoding and general conversion. Building an encoder into the runtime does not
+add those export modes to the GUI or guarantee that newly encoded GOPs can be
+spliced into every source bitstream.
+
+| Use | Encoders |
+| --- | --- |
+| H.264 (GPL) | x264 with 8/10-bit YUV and interlaced support; RGB input through libx264rgb |
+| HEVC (GPL) | x265 multilib, with 8/10/12-bit APIs in one static archive |
+| Web video | VP8/VP9 through libvpx, including high-bit-depth VP9; AV1 through libaom and SVT-AV1 |
+| MPEG video | Native MPEG-1, MPEG-2 and MPEG-4 Part 2 |
+| Lossless and intermediate video | FFV1, HuffYUV/FFVHuff, Ut Video, ProRes, DNxHD/DNxHR and raw video |
+| Compressed audio | AAC, AC-3/E-AC-3, MP2, MP3 through LAME, Opus and Vorbis |
+| Lossless audio | FLAC, ALAC, WavPack, TTA and common integer/float PCM formats in both byte orders |
+| Images and subtitles | PNG, MJPEG, BMP, TIFF, GIF, APNG, ASS, mov_text, SRT, WebVTT, DVB and DVD subtitles |
+
+`tools/build_encoder_runtime.sh` builds pinned, SHA-256-checked static sources:
+
+- x264: `b35605ace3ddf7c1a5d67a2eb553f034aef41d55` (GPL builds only).
+- x265: 4.3 (GPL builds only).
+- libvpx: 1.17.0; libaom: 3.15.3; SVT-AV1: 4.3.0.
+- LAME: 3.100; Opus: 1.6.1; libogg: 1.3.6; libvorbis: 1.3.7.
+
+All three platform scripts consume the same generated FFmpeg encoder options.
+The dependencies are linked into avcodec and do not add separately packaged
+DLLs, dylibs or shared objects. Runtime manifests include the encoder list and
+source versions. Existing dependency checks still reject unexpected dynamic
+libraries. The x265 archive combines separately built 8/10/12-bit objects;
+shipping only its 8-bit archive would silently lose high-bit-depth encoding.
+
+The GPL runtimes retain their current GPL configuration. The optional LGPL
+build path excludes x264/x265. No nonfree encoder SDK is introduced. Hardware
+encoding is not enabled by this software encoder list.
+
+AVS/AVS2/AVS3 and Audio Vivid/DRA encoding are not included. The upstream xavs2
+project still lists high-bit-depth and ARM optimization as incomplete work;
+uavs3e requires a separate FFmpeg encoder integration and cross-platform
+validation. Their decoder availability does not imply a matching encoder.
+Dolby Vision preservation and HDR metadata handling during boundary re-encoding
+also require application-side implementation and validation.
 
 ## Workflow Inputs
 
@@ -154,6 +197,13 @@ and parsing without an audio decoder. AV3A MP4, TS and raw-stream round trips
 also check codec configuration, packet boundaries and SHA-256 payload hashes.
 Subtitle checks cover decoder/filter availability, actual mov_text decoding, and
 libass output pixels with system fonts, animation, Unicode wrapping and seeking.
+Encoder checks require the software encoder list, round-trip short synthetic
+video through H.264, HEVC, MPEG-2, VP8/VP9 and AV1, and encode/drain in-memory
+audio. High-bit-depth checks include H.264 10-bit, HEVC 10/12-bit and VP9/AV1
+10-bit. H.264 and MPEG-2 also round-trip synthetic 1920x1080 interlaced
+video at 25 frames/50 fields per second with both top- and bottom-field-first
+order, checking that decoded frames retain their scan type and field order.
+No external samples or audio output device are needed.
 
 The Windows build first checks static C++/pthread linkage with both GCC drivers
 using `tools/verify_windows_linkage.cpp`, including a thread and an exception.
@@ -197,6 +247,14 @@ with the repository or uploaded by the workflows.
 ## Third-Party Libraries
 
 - FFmpeg: https://ffmpeg.org/
+- x264: https://code.videolan.org/videolan/x264
+- x265: https://github.com/Multicorewareinc/x265
+- libvpx: https://chromium.googlesource.com/webm/libvpx
+- libaom: https://aomedia.googlesource.com/aom
+- SVT-AV1: https://gitlab.com/AOMediaCodec/SVT-AV1
+- LAME: https://lame.sourceforge.io/
+- Opus: https://opus-codec.org/
+- libogg/libvorbis: https://xiph.org/
 - uavs3d: https://github.com/uavs3/uavs3d
 - davs2-10bit: https://github.com/xatabhk/davs2-10bit
 - AV3A demux/mux, AATF tables and headers: [OpenHarmony third_party_ffmpeg](https://github.com/openharmony/third_party_ffmpeg) (original container implementation: [ac883016](https://github.com/openharmony/third_party_ffmpeg/commit/ac883016d94bb95354e2824a501702f64c9ad945), Shuai Liu, 2024-11-01)

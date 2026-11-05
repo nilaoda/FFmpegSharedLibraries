@@ -17,8 +17,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install subtitle build tools
-        run: brew install meson ninja
+      - name: Install native build tools
+        run: brew install meson ninja nasm
 
       - name: Build runtime
         run: |
