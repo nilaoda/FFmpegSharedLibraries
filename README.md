@@ -211,6 +211,9 @@ The complete static library group is passed as one linker argument so FFmpeg
 9's C++ driver selection cannot reorder the runtime libraries. Windows pkg-config
 link flags explicitly select the static winpthread archive, preventing encoder
 dependencies from mixing pthread DLL import libraries with the static runtime.
+Compiler-supplied C++/GCC runtime entries from pkg-config are filtered out; the
+explicit static C++ group and compiler driver provide those libraries instead.
+An explicit `-lgcc_s` would otherwise bypass `-static-libgcc` and add a DLL import.
 The linkage probe runs again with the encoder dependency flags before FFmpeg
 compilation. Packaged DLLs must still pass the final dependency check.
 

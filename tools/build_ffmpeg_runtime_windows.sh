@@ -137,8 +137,11 @@ verify_static_linkage() {
     while IFS= read -r dependency; do
       dependency_upper="$(printf '%s' "$dependency" | tr '[:lower:]' '[:upper:]')"
       if ! is_system_dll "$dependency_upper"; then
-        cat "$WORK_ROOT/linkage-probe.imports.txt" >&2
         echo "Unexpected $driver runtime dependency: $dependency" >&2
+        printf 'Encoder dependency flags:' >&2
+        printf ' %q' "$@" >&2
+        printf '\nImported DLLs:\n' >&2
+        dll_dependencies "$WORK_ROOT/linkage-probe.exe" >&2
         exit 1
       fi
     done < <(dll_dependencies "$WORK_ROOT/linkage-probe.exe")
