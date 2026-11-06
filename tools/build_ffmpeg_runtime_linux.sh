@@ -88,6 +88,8 @@ LIBRARY_NAMES=(
 SYSTEM_SO_PATTERNS=(
   libc.so.6
   libm.so.6
+  # glibc 的向量数学库，自动向量化的代码可能通过 libm 引入。
+  libmvec.so.1
   libpthread.so.0
   libdl.so.2
   librt.so.1
