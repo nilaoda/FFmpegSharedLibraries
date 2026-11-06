@@ -5,7 +5,7 @@ set -euo pipefail
 # - FFmpeg shared dylibs are packaged
 # - libuavs3d is built as a static dependency and linked into FFmpeg
 # - unexpected external dylib dependencies are treated as build failures
-# - decoders stay broad by default, while most encoders are disabled
+# 软件编码器由公共依赖脚本构建，并通过显式白名单启用。
 
 FFMPEG_VERSION="${1:?usage: build_ffmpeg_runtime_macos.sh <ffmpeg-version> <gpl|lgpl> [work-root] }"
 LICENSE_FLAVOR="${2:?usage: build_ffmpeg_runtime_macos.sh <ffmpeg-version> <gpl|lgpl> [work-root] }"
@@ -48,6 +48,7 @@ FFMPEG_DAVS2_COLOR_PATCH_PATH="$REPO_ROOT/patches/ffmpeg/0004-libdavs2-export-se
 FFMPEG_DAVS2_RESET_PATCH_PATH="$REPO_ROOT/patches/ffmpeg/0008-libdavs2-reset-reference-state-on-seek.patch"
 FFMPEG_LIBASS_EMBED_PATCH_PATH="$REPO_ROOT/patches/ffmpeg/0005-embed-libass-in-avfilter.patch"
 SUBTITLE_INSTALL_ROOT="$WORK_ROOT/subtitle-install"
+ENCODER_INSTALL_ROOT="$WORK_ROOT/encoder-install"
 DISC_INSTALL_ROOT="$WORK_ROOT/disc-install"
 FFMPEG_DISC_EMBED_PATCH_PATH="$REPO_ROOT/patches/ffmpeg/0007-embed-disc-libraries-in-avformat.patch"
 INSTALL_ROOT="$WORK_ROOT/install"
@@ -262,8 +263,11 @@ bash "$SCRIPT_DIR/embed_libass.sh" "$SOURCE_DIR" "$SUBTITLE_INSTALL_ROOT"
 PKG_CONFIG_BIN="$PKG_CONFIG_BIN" bash "$SCRIPT_DIR/build_disc_runtime.sh" macos "$LICENSE_FLAVOR" "$WORK_ROOT" "$CPU_COUNT"
 bash "$SCRIPT_DIR/embed_discs.sh" "$SOURCE_DIR" "$DISC_INSTALL_ROOT" "$LICENSE_FLAVOR"
 
-PKG_CONFIG_PATH_ENTRIES=("$UAVS3D_INSTALL_ROOT/lib/pkgconfig" "$SUBTITLE_INSTALL_ROOT/lib/pkgconfig" "$DISC_INSTALL_ROOT/lib/pkgconfig")
-CPPFLAGS_ENTRIES=("-I$UAVS3D_INSTALL_ROOT/include")
+PKG_CONFIG_BIN="$PKG_CONFIG_BIN" bash "$SCRIPT_DIR/build_encoder_runtime.sh" macos "$LICENSE_FLAVOR" "$WORK_ROOT" "$CPU_COUNT"
+source "$ENCODER_INSTALL_ROOT/ffmpeg-options.sh"
+
+PKG_CONFIG_PATH_ENTRIES=("$ENCODER_INSTALL_ROOT/lib/pkgconfig" "$UAVS3D_INSTALL_ROOT/lib/pkgconfig" "$SUBTITLE_INSTALL_ROOT/lib/pkgconfig" "$DISC_INSTALL_ROOT/lib/pkgconfig")
+CPPFLAGS_ENTRIES=("-I$ENCODER_INSTALL_ROOT/include" "-I$UAVS3D_INSTALL_ROOT/include")
 
 if [[ "$ENABLE_LIBDAVS2" == true ]]; then
   PKG_CONFIG_PATH_ENTRIES+=("$DAVS2_INSTALL_ROOT/lib/pkgconfig")
@@ -271,7 +275,7 @@ if [[ "$ENABLE_LIBDAVS2" == true ]]; then
 fi
 
 export PKG_CONFIG_PATH="$(IFS=:; echo "${PKG_CONFIG_PATH_ENTRIES[*]}")${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
-export LDFLAGS="-L$UAVS3D_INSTALL_ROOT/lib${LDFLAGS:+ $LDFLAGS}"
+export LDFLAGS="-L$ENCODER_INSTALL_ROOT/lib -L$UAVS3D_INSTALL_ROOT/lib${LDFLAGS:+ $LDFLAGS}"
 export CPPFLAGS="${CPPFLAGS_ENTRIES[*]}${CPPFLAGS:+ $CPPFLAGS}"
 
 pushd "$SOURCE_DIR" >/dev/null
@@ -300,8 +304,6 @@ CONFIGURE_FLAGS=(
   --disable-indevs
   --disable-outdevs
   --disable-devices
-  --disable-encoders
-  --enable-encoder=png,mjpeg,bmp,ass,movtext,subrip,webvtt
   --enable-videotoolbox
   --enable-audiotoolbox
   --enable-neon
@@ -311,6 +313,7 @@ if [[ "$LICENSE_FLAVOR" == "gpl" ]]; then
   CONFIGURE_FLAGS+=(--enable-gpl --enable-version3 --enable-libdvdread --enable-libdvdnav)
 fi
 
+CONFIGURE_FLAGS+=("${SOFTWARE_ENCODER_FLAGS[@]}")
 CONFIGURE_FLAGS+=(--enable-libuavs3d)
 if [[ "$ENABLE_LIBDAVS2" == true ]]; then
   CONFIGURE_FLAGS+=(--enable-libdavs2)
@@ -325,6 +328,7 @@ if ! ./configure "${CONFIGURE_FLAGS[@]}"; then
   fi
   exit 1
 fi
+bash "$SCRIPT_DIR/verify_encoder_config.sh" config_components.h "$SOFTWARE_ENCODERS"
 make -j"$CPU_COUNT"
 make install
 
@@ -380,6 +384,7 @@ done
     echo "libdavs2 reference management: upstream DPB lifetime rules"
   fi
   cat "$SUBTITLE_INSTALL_ROOT/versions.txt"
+  cat "$ENCODER_INSTALL_ROOT/versions.txt"
   echo "Built on: $(date -u +"%Y-%m-%dT%H:%M:%SZ")"
   echo
   echo "Configure flags:"

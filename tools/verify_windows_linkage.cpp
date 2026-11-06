@@ -1,10 +1,13 @@
-/* Force C++ exception and pthread symbols through the static runtime group. */
+/* 同时引用原生线程接口和 C++ 运行时，检查静态线程库链接是否一致。 */
 #include <mutex>
 #include <stdexcept>
 #include <thread>
+#include <pthread.h>
 
 int main()
 {
+    if (pthread_num_processors_np() < 1)
+        return 1;
     std::mutex mutex;
     int value = 0;
     std::thread worker([&] {
