@@ -83,10 +83,10 @@ spliced into every source bitstream.
 | --- | --- |
 | H.264 (GPL) | x264 with 8/10-bit YUV and interlaced support; RGB input through libx264rgb |
 | HEVC (GPL) | x265 multilib, with 8/10/12-bit APIs in one static archive |
-| Web video | VP8/VP9 through libvpx, including high-bit-depth VP9; AV1 through libaom and SVT-AV1 |
+| Web video | VP8/VP9 through libvpx, including high-bit-depth VP9; AV1 through libaom |
 | MPEG video | Native MPEG-1, MPEG-2 and MPEG-4 Part 2 |
 | Lossless and intermediate video | FFV1, HuffYUV/FFVHuff, Ut Video, ProRes, DNxHD/DNxHR and raw video |
-| Compressed audio | AAC, AC-3/E-AC-3, MP2, MP3 through LAME, Opus and Vorbis |
+| Compressed audio | AAC, AC-3/E-AC-3, MP2 and Opus |
 | Lossless audio | FLAC, ALAC, WavPack, TTA and common integer/float PCM formats in both byte orders |
 | Images and subtitles | MJPEG, BMP, TIFF, GIF, ASS, mov_text, SRT, WebVTT, DVB and DVD subtitles |
 
@@ -94,8 +94,8 @@ spliced into every source bitstream.
 
 - x264: `b35605ace3ddf7c1a5d67a2eb553f034aef41d55` (GPL builds only).
 - x265: 4.3 (GPL builds only).
-- libvpx: 1.17.0; libaom: 3.15.3; SVT-AV1: 4.3.0.
-- LAME: 3.100; Opus: 1.6.1; libogg: 1.3.6; libvorbis: 1.3.7.
+- libvpx: 1.17.0; libaom: 3.15.3.
+- Opus: 1.6.1.
 
 All three platform scripts consume the same generated FFmpeg encoder options
 and check that every requested encoder is enabled before compilation.
@@ -200,10 +200,10 @@ Subtitle checks cover decoder/filter availability, actual mov_text decoding, and
 libass output pixels with system fonts, animation, Unicode wrapping and seeking.
 Encoder checks require the software encoder list, round-trip short synthetic
 video through H.264, HEVC, MPEG-2, VP8/VP9 and AV1, and encode/drain in-memory
-audio. High-bit-depth checks include H.264 10-bit, HEVC 10/12-bit and VP9/AV1
-10-bit. H.264 and MPEG-2 also round-trip synthetic 1920x1080 interlaced
-video at 25 frames/50 fields per second with both top- and bottom-field-first
-order, checking that decoded frames retain their scan type and field order.
+AAC, AC-3, MP2, Opus and FLAC audio. High-bit-depth checks include H.264 10-bit,
+HEVC 10/12-bit and VP9/AV1 10-bit. H.264 and MPEG-2 also round-trip synthetic
+1920x1080 interlaced video at 25 frames/50 fields per second with both top- and
+bottom-field-first order, checking that decoded frames retain their scan type and field order.
 No external samples or audio output device are needed.
 
 The Windows build first checks static C++/pthread linkage with both GCC drivers
@@ -258,10 +258,7 @@ with the repository or uploaded by the workflows.
 - x265: https://github.com/Multicorewareinc/x265
 - libvpx: https://chromium.googlesource.com/webm/libvpx
 - libaom: https://aomedia.googlesource.com/aom
-- SVT-AV1: https://gitlab.com/AOMediaCodec/SVT-AV1
-- LAME: https://lame.sourceforge.io/
 - Opus: https://opus-codec.org/
-- libogg/libvorbis: https://xiph.org/
 - uavs3d: https://github.com/uavs3/uavs3d
 - davs2-10bit: https://github.com/xatabhk/davs2-10bit
 - AV3A demux/mux, AATF tables and headers: [OpenHarmony third_party_ffmpeg](https://github.com/openharmony/third_party_ffmpeg) (original container implementation: [ac883016](https://github.com/openharmony/third_party_ffmpeg/commit/ac883016d94bb95354e2824a501702f64c9ad945), Shuai Liu, 2024-11-01)

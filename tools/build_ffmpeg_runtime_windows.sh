@@ -332,7 +332,7 @@ export LDFLAGS="-L$ENCODER_INSTALL_ROOT/lib${LDFLAGS:+ $LDFLAGS}"
 # 统一处理所有依赖的线程链接参数，避免新编码库的 -lpthread 抢先引入导入库。
 export FFMPEG_PKG_CONFIG_BIN="$PKG_CONFIG_BIN"
 PKG_CONFIG_BIN="$SCRIPT_DIR/pkg_config_windows_static.sh"
-ENCODER_LINK_PACKAGES=(vpx aom SvtAv1Enc)
+ENCODER_LINK_PACKAGES=(vpx aom opus)
 if [[ "$LICENSE_FLAVOR" == gpl ]]; then
   ENCODER_LINK_PACKAGES+=(x264 x265)
 fi

@@ -22,7 +22,8 @@ ENCODER_BUILD="$ENCODER_WORK/encoder-build"
 ENCODER_PREFIX="$ENCODER_WORK/encoder-install"
 ENCODER_AR="${AR:-ar}"
 case "$ENCODER_PLATFORM" in
-  macos) VPX_TARGET=arm64-darwin-gcc ;;
+  # libvpx 的无版本号 darwin target 用于 iOS；macOS 必须使用带版本号的 target。
+  macos) VPX_TARGET=arm64-darwin20-gcc ;;
   linux) VPX_TARGET=x86_64-linux-gcc ;;
   windows) VPX_TARGET=x86_64-win64-gcc ;;
 esac
@@ -74,24 +75,6 @@ encoder_source opus-1.6.1.tar.gz https://downloads.xiph.org/releases/opus/opus-1
 encoder_cmake "$ENCODER_SOURCE/opus-1.6.1" opus -DOPUS_BUILD_TESTING=OFF -DOPUS_BUILD_PROGRAMS=OFF \
   -DOPUS_DRED=OFF -DOPUS_OSCE=OFF -DOPUS_INSTALL_PKG_CONFIG_MODULE=ON
 
-encoder_source libogg-1.3.6.tar.gz https://downloads.xiph.org/releases/ogg/libogg-1.3.6.tar.gz \
-  83e6704730683d004d20e21b8f7f55dcb3383cdf84c0daedf30bde175f774638 libogg-1.3.6
-encoder_cmake "$ENCODER_SOURCE/libogg-1.3.6" ogg -DINSTALL_DOCS=OFF
-encoder_source libvorbis-1.3.7.tar.gz https://downloads.xiph.org/releases/vorbis/libvorbis-1.3.7.tar.gz \
-  0e982409a9c3fc82ee06e08205b1355e5c6aa4c36bca58146ef399621b0ce5ab libvorbis-1.3.7
-encoder_cmake "$ENCODER_SOURCE/libvorbis-1.3.7" vorbis -DCMAKE_PREFIX_PATH="$ENCODER_PREFIX"
-
-encoder_source lame-3.100.tar.gz https://downloads.sourceforge.net/project/lame/lame/3.100/lame-3.100.tar.gz \
-  ddfe36cab873794038ae2c1210557ad34857a4b6bdc515785d1da9e175b1da1e lame-3.100
-mkdir -p "$ENCODER_BUILD/lame"
-pushd "$ENCODER_BUILD/lame" >/dev/null
-"$ENCODER_SOURCE/lame-3.100/configure" --prefix="$ENCODER_PREFIX" --libdir="$ENCODER_PREFIX/lib" \
-  --disable-shared --enable-static --disable-frontend --disable-decoder \
-  --disable-analyzer-hooks --disable-dependency-tracking --with-pic
-make -j "$ENCODER_JOBS"
-make install
-popd >/dev/null
-
 encoder_source libvpx-1.17.0.tar.gz https://codeload.github.com/webmproject/libvpx/tar.gz/refs/tags/v1.17.0 \
   1020f184046187baa2985dbde38e0691f49c44088bca7a1842b0236c6081dc0a libvpx-1.17.0
 mkdir -p "$ENCODER_BUILD/vpx"
@@ -108,19 +91,14 @@ encoder_source libaom-3.15.3.tar.gz https://storage.googleapis.com/aom-releases/
 encoder_cmake "$ENCODER_SOURCE/libaom-3.15.3" aom -DENABLE_TESTS=OFF -DENABLE_EXAMPLES=OFF \
   -DENABLE_TOOLS=OFF -DENABLE_DOCS=OFF -DCONFIG_PIC=1 -DCONFIG_RUNTIME_CPU_DETECT=1 -DCONFIG_AV1_HIGHBITDEPTH=1
 
-encoder_source SVT-AV1-v4.3.0.tar.bz2 https://gitlab.com/AOMediaCodec/SVT-AV1/-/archive/v4.3.0/SVT-AV1-v4.3.0.tar.bz2 \
-  9223ce06e6172ad41357ed23b3b00f036e03794b86b0e20ea9ccb3f648b8955d SVT-AV1-v4.3.0
-encoder_cmake "$ENCODER_SOURCE/SVT-AV1-v4.3.0" svt-av1 -DBUILD_APPS=OFF -DBUILD_TESTING=OFF \
-  -DSVT_AV1_LTO=OFF -DNATIVE=OFF -DENABLE_SVE=OFF -DENABLE_SVE2=OFF
-
 SOFTWARE_ENCODERS="mjpeg,bmp,tiff,gif,ass,movtext,subrip,webvtt,dvbsub,dvdsub"
 SOFTWARE_ENCODERS+=",mpeg1video,mpeg2video,mpeg4,ffv1,huffyuv,ffvhuff,utvideo,prores_ks,dnxhd,rawvideo"
 SOFTWARE_ENCODERS+=",aac,ac3,ac3_fixed,eac3,mp2,mp2fixed,alac,flac,wavpack,tta"
 SOFTWARE_ENCODERS+=",pcm_s8,pcm_u8,pcm_s16le,pcm_s16be,pcm_s24le,pcm_s24be,pcm_s32le,pcm_s32be"
 SOFTWARE_ENCODERS+=",pcm_f32le,pcm_f32be,pcm_f64le,pcm_f64be,pcm_alaw,pcm_mulaw"
-SOFTWARE_ENCODERS+=",libmp3lame,libopus,libvorbis,libvpx_vp8,libvpx_vp9,libaom_av1,libsvtav1"
-SOFTWARE_ENCODER_FLAGS=(--enable-libmp3lame --enable-libopus --enable-libvorbis --enable-libvpx --enable-libaom --enable-libsvtav1)
-ENCODER_ARCHIVES=(mp3lame opus ogg vorbis vorbisenc vpx aom SvtAv1Enc)
+SOFTWARE_ENCODERS+=",libopus,libvpx_vp8,libvpx_vp9,libaom_av1"
+SOFTWARE_ENCODER_FLAGS=(--enable-libopus --enable-libvpx --enable-libaom)
+ENCODER_ARCHIVES=(opus vpx aom)
 if [[ "$ENCODER_FLAVOR" == gpl ]]; then
   encoder_source x264-b35605ace3ddf7c1a5d67a2eb553f034aef41d55.tar.gz \
     https://codeload.github.com/mirror/x264/tar.gz/b35605ace3ddf7c1a5d67a2eb553f034aef41d55 \
@@ -193,7 +171,7 @@ fi
 } > "$ENCODER_PREFIX/ffmpeg-options.sh"
 cat > "$ENCODER_PREFIX/versions.txt" <<VERSIONS
 Software encoders: $SOFTWARE_ENCODERS
-Encoder dependencies (static): libvpx 1.17.0, libaom 3.15.3, SVT-AV1 4.3.0, LAME 3.100, Opus 1.6.1, libogg 1.3.6, libvorbis 1.3.7
+Encoder dependencies (static): libvpx 1.17.0, libaom 3.15.3, Opus 1.6.1
 VERSIONS
 if [[ "$ENCODER_FLAVOR" == gpl ]]; then
   cat >> "$ENCODER_PREFIX/versions.txt" <<VERSIONS

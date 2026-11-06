@@ -63,9 +63,6 @@ static int verify_video_encoder(const char *name, enum AVPixelFormat format, int
         av_dict_set(&options, "deadline", "realtime", 0);
         av_dict_set(&options, "cpu-used", "8", 0);
         av_dict_set(&options, "lag-in-frames", "0", 0);
-    } else if (!strcmp(name, "libsvtav1")) {
-        av_dict_set(&options, "preset", "12", 0);
-        av_dict_set(&options, "svtav1-params", "lp=1:lookahead=0", 0);
     } else if (codec->id == AV_CODEC_ID_AV1) {
         av_dict_set(&options, "usage", "realtime", 0);
         av_dict_set(&options, "cpu-used", "8", 0);
@@ -245,7 +242,7 @@ static int verify_encoders(void)
         "aac", "ac3", "ac3_fixed", "eac3", "mp2", "mp2fixed", "alac", "flac", "wavpack", "tta",
         "pcm_s8", "pcm_u8", "pcm_s16le", "pcm_s16be", "pcm_s24le", "pcm_s24be", "pcm_s32le", "pcm_s32be",
         "pcm_f32le", "pcm_f32be", "pcm_f64le", "pcm_f64be", "pcm_alaw", "pcm_mulaw",
-        "libmp3lame", "libopus", "libvorbis", "libvpx", "libvpx-vp9", "libaom-av1", "libsvtav1", "libx264", "libx264rgb", "libx265"
+        "libopus", "libvpx", "libvpx-vp9", "libaom-av1", "libx264", "libx264rgb", "libx265"
     };
     int failed = 0;
     for (unsigned i = 0; i < sizeof(required) / sizeof(required[0]); ++i) {
@@ -266,11 +263,11 @@ static int verify_encoders(void)
         {"libx265", AV_PIX_FMT_YUV420P, 8, AV_FIELD_PROGRESSIVE}, {"libx265", AV_PIX_FMT_YUV420P10LE, 10, AV_FIELD_PROGRESSIVE},
         {"libx265", AV_PIX_FMT_YUV420P12LE, 12, AV_FIELD_PROGRESSIVE}, {"mpeg2video", AV_PIX_FMT_YUV420P, 8, AV_FIELD_PROGRESSIVE},
         {"libvpx", AV_PIX_FMT_YUV420P, 8, AV_FIELD_PROGRESSIVE}, {"libvpx-vp9", AV_PIX_FMT_YUV420P10LE, 10, AV_FIELD_PROGRESSIVE},
-        {"libaom-av1", AV_PIX_FMT_YUV420P10LE, 10, AV_FIELD_PROGRESSIVE}, {"libsvtav1", AV_PIX_FMT_YUV420P10LE, 10, AV_FIELD_PROGRESSIVE},
+        {"libaom-av1", AV_PIX_FMT_YUV420P10LE, 10, AV_FIELD_PROGRESSIVE},
         {"libx264", AV_PIX_FMT_YUV420P, 8, AV_FIELD_TT}, {"libx264", AV_PIX_FMT_YUV420P, 8, AV_FIELD_BB},
         {"mpeg2video", AV_PIX_FMT_YUV420P, 8, AV_FIELD_TT}, {"mpeg2video", AV_PIX_FMT_YUV420P, 8, AV_FIELD_BB}
     };
-    const char *audio[] = {"aac", "libmp3lame", "libopus", "libvorbis", "flac"};
+    const char *audio[] = {"aac", "ac3", "mp2", "libopus", "flac"};
     for (unsigned i = 0; i < sizeof(videos) / sizeof(videos[0]); ++i)
         failed |= verify_video_encoder(videos[i].name, videos[i].format, videos[i].depth, videos[i].field_order);
     for (unsigned i = 0; i < sizeof(audio) / sizeof(audio[0]); ++i)
