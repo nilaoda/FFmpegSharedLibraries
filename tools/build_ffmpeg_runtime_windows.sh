@@ -11,6 +11,8 @@ set -euo pipefail
 FFMPEG_VERSION="${1:?usage: build_ffmpeg_runtime_windows.sh <ffmpeg-version> <gpl|lgpl> [work-root] }"
 LICENSE_FLAVOR="${2:?usage: build_ffmpeg_runtime_windows.sh <ffmpeg-version> <gpl|lgpl> [work-root] }"
 WORK_ROOT="${3:-$PWD/.ffmpeg-runtime-build-win64}"
+mkdir -p "$WORK_ROOT"
+WORK_ROOT="$(cd "$WORK_ROOT" && pwd)"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
@@ -29,6 +31,7 @@ UAVS3D_GIT_URL="https://github.com/uavs3/uavs3d.git"
 UAVS3D_GIT_REF="0e20d2c291853f196c68922a264bcd8471d75b68"
 DAVS2_GIT_URL="https://github.com/xatabhk/davs2-10bit.git"
 DAVS2_GIT_REF="21d64c8f8e36af71fc7a488cd6f789c86cdd1200"
+STATIC_INSTALL_ROOT="$WORK_ROOT/static-install"
 SOURCE_ROOT="$WORK_ROOT/src"
 SOURCE_ARCHIVE="$SOURCE_ROOT/$ARCHIVE_NAME"
 SOURCE_DIR="$SOURCE_ROOT/ffmpeg-$FFMPEG_VERSION"
@@ -181,7 +184,7 @@ patch -d "$SOURCE_DIR" -p1 --batch --forward --fuzz=0 <"$FFMPEG_DISC_EMBED_PATCH
 patch -d "$SOURCE_DIR" -p1 --batch --forward --fuzz=0 --dry-run <"$FFMPEG_AV3A_METADATA_PATCH_PATH" >/dev/null
 patch -d "$SOURCE_DIR" -p1 --batch --forward --fuzz=0 <"$FFMPEG_AV3A_METADATA_PATCH_PATH"
 
-rm -rf "$INSTALL_ROOT" "$PACKAGE_ROOT" "$UAVS3D_INSTALL_ROOT" "$UAVS3D_SOURCE_DIR" "$DAVS2_INSTALL_ROOT" "$DAVS2_SOURCE_DIR"
+rm -rf "$INSTALL_ROOT" "$STATIC_INSTALL_ROOT" "$PACKAGE_ROOT" "$UAVS3D_INSTALL_ROOT" "$UAVS3D_SOURCE_DIR" "$DAVS2_INSTALL_ROOT" "$DAVS2_SOURCE_DIR"
 mkdir -p "$INSTALL_ROOT" "$RUNTIME_ROOT" "$UAVS3D_INSTALL_ROOT"
 
 git init "$UAVS3D_SOURCE_DIR" >/dev/null
@@ -340,10 +343,13 @@ encoder_link_options="$("$PKG_CONFIG_BIN" --static --libs "${ENCODER_LINK_PACKAG
 read -r -a encoder_link_flags <<< "$encoder_link_options"
 verify_static_linkage "${encoder_link_flags[@]}"
 
-pushd "$SOURCE_DIR" >/dev/null
+# MinGW disables static archives whenever shared libraries are enabled.
+# Duplicate the prepared source before either configure can write build files.
+STATIC_SOURCE_DIR="$SOURCE_ROOT/ffmpeg-static-$FFMPEG_VERSION"
+rm -rf "$STATIC_SOURCE_DIR"
+cp -R "$SOURCE_DIR" "$STATIC_SOURCE_DIR"
 
 CONFIGURE_FLAGS=(
-  --prefix="$INSTALL_ROOT"
   --arch=x86_64
   --target-os=mingw32
   --cc=gcc
@@ -354,8 +360,6 @@ CONFIGURE_FLAGS=(
   --windres=windres
   --pkg-config="$PKG_CONFIG_BIN"
   --pkg-config-flags=--static
-  --enable-shared
-  --disable-static
   --disable-programs
   --disable-doc
   --disable-debug
@@ -384,16 +388,6 @@ if [[ "$ENABLE_LIBDAVS2" == true ]]; then
   CONFIGURE_FLAGS+=(--enable-libdavs2)
 fi
 
-if ! ./configure "${CONFIGURE_FLAGS[@]}"; then
-  if [[ -f ffbuild/config.log ]]; then
-    echo "===== ffbuild/config.log (tail 400) =====" >&2
-    tail -n 400 ffbuild/config.log >&2
-  else
-    echo "ffbuild/config.log was not generated" >&2
-  fi
-  exit 1
-fi
-
 require_config_enabled() {
   local config_file="$1"
   local config_name="$2"
@@ -404,23 +398,40 @@ require_config_enabled() {
   fi
 }
 
-for config_name in D3D11VA DXVA2; do
-  require_config_enabled config.h "$config_name"
-done
+build_ffmpeg() (
+  build_source="$1"
+  build_prefix="$2"
+  shift 2
+  cd "$build_source"
 
-for config_name in \
-  H264_D3D11VA_HWACCEL \
-  H264_DXVA2_HWACCEL \
-  HEVC_D3D11VA_HWACCEL \
-  HEVC_DXVA2_HWACCEL; do
-  require_config_enabled config_components.h "$config_name"
-done
+  if ! ./configure --prefix="$build_prefix" "${CONFIGURE_FLAGS[@]}" "$@"; then
+    if [[ -f ffbuild/config.log ]]; then
+      echo "===== $build_source/ffbuild/config.log (tail 400) =====" >&2
+      tail -n 400 ffbuild/config.log >&2
+    else
+      echo "ffbuild/config.log was not generated" >&2
+    fi
+    exit 1
+  fi
 
-bash "$SCRIPT_DIR/verify_encoder_config.sh" config_components.h "$SOFTWARE_ENCODERS"
-make -j"$CPU_COUNT"
-make install
+  for config_name in D3D11VA DXVA2; do
+    require_config_enabled config.h "$config_name"
+  done
 
-popd >/dev/null
+  for config_name in \
+    H264_D3D11VA_HWACCEL \
+    H264_DXVA2_HWACCEL \
+    HEVC_D3D11VA_HWACCEL \
+    HEVC_DXVA2_HWACCEL; do
+    require_config_enabled config_components.h "$config_name"
+  done
+
+  bash "$SCRIPT_DIR/verify_encoder_config.sh" config_components.h "$SOFTWARE_ENCODERS"
+  make -j"$CPU_COUNT"
+  make install
+)
+
+build_ffmpeg "$SOURCE_DIR" "$INSTALL_ROOT" --enable-shared --disable-static
 
 for library_name in "${LIBRARY_NAMES[@]}"; do
   source_path="$INSTALL_ROOT/bin/$library_name"
@@ -455,7 +466,7 @@ done
   echo "Built on: $(date -u +"%Y-%m-%dT%H:%M:%SZ")"
   echo
   echo "Configure flags:"
-  printf '  %s\n' "${CONFIGURE_FLAGS[@]}"
+  printf '  %s\n' "--prefix=$INSTALL_ROOT" "${CONFIGURE_FLAGS[@]}" --enable-shared --disable-static
   echo
   echo "Bundled DLLs:"
   find "$RUNTIME_ROOT" -maxdepth 1 -type f -name '*.dll' -print | sort
@@ -487,8 +498,14 @@ for dll in "$RUNTIME_ROOT"/*.dll; do
   done < <(dll_dependencies "$dll")
 done
 
+rm -f -- "$ARTIFACT_PATH"
 (
   cd "$PACKAGE_ROOT"
   zip -qj "$ARTIFACT_PATH" ./*.dll
 )
 echo "Created artifact: $ARTIFACT_PATH"
+
+build_ffmpeg "$STATIC_SOURCE_DIR" "$STATIC_INSTALL_ROOT" --disable-shared --enable-static
+bash "$SCRIPT_DIR/package_ffmpeg_static.sh" windows "$FFMPEG_VERSION" "$LICENSE_FLAVOR" \
+  "$WORK_ROOT" "$STATIC_INSTALL_ROOT" "$STATIC_SOURCE_DIR/ffbuild/config.mak" \
+  "$ARTIFACT_ROOT/${PACKAGE_NAME/-shared-/-static-}.zip"

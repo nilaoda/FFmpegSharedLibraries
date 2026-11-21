@@ -33,7 +33,7 @@ for component in "${DISC_EMBED_LIBRARIES[@]}"; do
       mv "$DISC_EMBED_DIR/$component/$member" "$DISC_EMBED_DIR/$component/$normalized"
       member="$normalized"
     fi
-    printf 'SHLIBOBJS += disc-embedded/%s/%s\n' "$component" "$member" >> "$DISC_EMBED_MAK"
+    printf 'OBJS-yes += disc-embedded/%s/%s\n' "$component" "$member" >> "$DISC_EMBED_MAK"
   done <<< "$members"
 done
 

@@ -6,7 +6,7 @@ GitHub Actions workflows for building FFmpeg shared-library runtimes with softwa
 
 - `macos-15`: arm64 `.dylib`
 - `windows-latest`: win64 `.dll`
-- `ubuntu-latest`: linux x64 `.so`
+- `ubuntu-24.04`: Linux x64 `.so` (glibc 2.39 baseline)
 
 Each runtime contains seven FFmpeg shared libraries. libass is linked statically into libavfilter, which also exports its public API; no separate libass runtime file is needed.
 
@@ -170,6 +170,33 @@ includes its separately compiled assembly objects in the installed archive.
 `tools/embed_libass.sh` adds all libass objects to libavfilter and limits its
 subtitle exports to upstream's `libass.sym` public API list. Font and shaping
 implementation symbols remain internal. The runtime manifest records versions.
+
+## Static development packages
+
+Each workflow verifies and uploads two ZIPs as separate GitHub Actions
+artifacts. The `-shared-` ZIP is the seven-library runtime. The `-static-` ZIP
+contains the seven FFmpeg archives, their third-party static dependencies,
+public FFmpeg/libass/disc headers, a build manifest and a relocatable
+`ffmpeg-static` pkg-config module.
+
+Use GCC on Linux, Clang on macOS, or the MSYS2 MinGW-w64 GCC toolchain on
+Windows. For example, from the extracted static package directory:
+
+```sh
+export PKG_CONFIG_LIBDIR=lib/pkgconfig
+export PKG_CONFIG_PATH=
+cc player.c $(pkg-config --static --cflags --libs ffmpeg-static) -o player
+```
+
+On Windows, use `gcc` and `pkgconf` for this command. On macOS, use
+`clang` and target macOS 14.0 or later. The static package still uses
+platform system libraries and frameworks.
+
+Linux and macOS build both library types from a single FFmpeg configuration.
+Windows builds FFmpeg twice with shared and static configurations and reuses
+the same third-party archives. Each ZIP is extracted into its own directory
+for verification before its upload. Linux CI checks the shared libraries and
+the statically linked verifier for required glibc symbol versions above 2.39.
 
 ## Runtime Loading and Diagnostics
 

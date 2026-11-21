@@ -10,6 +10,8 @@ set -euo pipefail
 FFMPEG_VERSION="${1:?usage: build_ffmpeg_runtime_macos.sh <ffmpeg-version> <gpl|lgpl> [work-root] }"
 LICENSE_FLAVOR="${2:?usage: build_ffmpeg_runtime_macos.sh <ffmpeg-version> <gpl|lgpl> [work-root] }"
 WORK_ROOT="${3:-$PWD/.ffmpeg-runtime-build}"
+mkdir -p "$WORK_ROOT"
+WORK_ROOT="$(cd "$WORK_ROOT" && pwd)"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
@@ -289,7 +291,7 @@ CONFIGURE_FLAGS=(
   --pkg-config-flags=--static
   --enable-shared
   --enable-pthreads
-  --disable-static
+  --enable-static
   --disable-programs
   --disable-doc
   --disable-debug
@@ -420,8 +422,13 @@ for dylib in "$RUNTIME_ROOT"/*.dylib; do
   done < <(otool -L "$dylib" | tail -n +2 | awk '{print $1}')
 done
 
+rm -f -- "$ARTIFACT_PATH"
 (
   cd "$PACKAGE_ROOT"
   zip -qj "$ARTIFACT_PATH" ./*.dylib
 )
 echo "Created artifact: $ARTIFACT_PATH"
+
+bash "$SCRIPT_DIR/package_ffmpeg_static.sh" macos "$FFMPEG_VERSION" "$LICENSE_FLAVOR" \
+  "$WORK_ROOT" "$INSTALL_ROOT" "$SOURCE_DIR/ffbuild/config.mak" \
+  "$ARTIFACT_ROOT/${PACKAGE_NAME/-shared-/-static-}.zip"
