@@ -26,6 +26,7 @@ jobs:
             git
             make
             patch
+            unzip
             zip
             mingw-w64-x86_64-binutils
             mingw-w64-x86_64-cmake
@@ -35,7 +36,8 @@ jobs:
             mingw-w64-x86_64-ninja
             mingw-w64-x86_64-pkgconf
 
-      - name: Build runtime
+      - name: Build runtimes
+        id: build
         shell: msys2 {0}
         run: |
           chmod +x tools/build_ffmpeg_runtime_windows.sh
@@ -45,20 +47,40 @@ jobs:
             "$LICENSE_FLAVOR" \
             "$WORK_ROOT_UNIX"
 
-      - name: Verify packaged runtime
+      - name: Verify shared ZIP
         shell: msys2 {0}
         run: |
           ROOT="$(cygpath -u "$RUNNER_TEMP/$WORK_ROOT_DIR")"
+          set -euo pipefail
+          PACKAGE="$(mktemp -d "$ROOT/shared-verify.XXXXXX")"
+          unzip -q "$ROOT/artifacts/ffmpeg-runtime-win64-$LICENSE_FLAVOR-shared-$FFMPEG_VERSION.zip" -d "$PACKAGE"
           gcc -O2 -Wall -Wextra -I"$ROOT/install/include" -I"$ROOT/subtitle-install/include" -I"$ROOT/disc-install/include" tools/verify_runtime.c \
             -L"$ROOT/install/lib" -lavformat -lavcodec -lavutil \
             -lavdevice -lavfilter -lswscale -lswresample \
-            -o "$ROOT/package/verify_runtime.exe"
-          "$ROOT/package/verify_runtime.exe"
+            -o "$PACKAGE/verify_runtime.exe"
+          "$PACKAGE/verify_runtime.exe"
 
-      - name: Upload runtime artifact
+      - name: Upload shared artifact
         uses: actions/upload-artifact@v4
         with:
           name: ffmpeg-runtime-win64-${{ env.LICENSE_FLAVOR }}-shared-${{ env.FFMPEG_VERSION }}
-          path: ${{ runner.temp }}\ffmpeg-runtime-build\artifacts\*.zip
+          path: ${{ runner.temp }}\ffmpeg-runtime-build\artifacts\ffmpeg-runtime-win64-${{ env.LICENSE_FLAVOR }}-shared-${{ env.FFMPEG_VERSION }}.zip
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Verify static ZIP
+        id: verify-static
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        shell: msys2 {0}
+        run: |
+          ROOT="$(cygpath -u "$RUNNER_TEMP/$WORK_ROOT_DIR")"
+          bash tools/verify_ffmpeg_static.sh windows "$ROOT/artifacts/ffmpeg-runtime-win64-$LICENSE_FLAVOR-static-$FFMPEG_VERSION.zip"
+
+      - name: Upload static artifact
+        if: ${{ !cancelled() && steps.verify-static.outcome == 'success' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ffmpeg-runtime-win64-${{ env.LICENSE_FLAVOR }}-static-${{ env.FFMPEG_VERSION }}
+          path: ${{ runner.temp }}\ffmpeg-runtime-build\artifacts\ffmpeg-runtime-win64-${{ env.LICENSE_FLAVOR }}-static-${{ env.FFMPEG_VERSION }}.zip
           if-no-files-found: error
           retention-days: 14

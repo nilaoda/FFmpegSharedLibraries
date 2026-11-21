@@ -11,7 +11,7 @@ env:
 jobs:
   build-linux-x64-runtime:
     name: Build FFmpeg Runtime [linux-x64]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
       - uses: actions/checkout@v4
@@ -31,12 +31,14 @@ jobs:
             ninja-build \
             patchelf \
             pkg-config \
+            unzip \
             zip
           python3 -m venv "$RUNNER_TEMP/subtitle-build-tools"
           "$RUNNER_TEMP/subtitle-build-tools/bin/pip" install meson==1.12.1
           echo "$RUNNER_TEMP/subtitle-build-tools/bin" >> "$GITHUB_PATH"
 
-      - name: Build runtime
+      - name: Build runtimes
+        id: build
         run: |
           chmod +x tools/build_ffmpeg_runtime_linux.sh
           tools/build_ffmpeg_runtime_linux.sh \
@@ -44,25 +46,45 @@ jobs:
             "$LICENSE_FLAVOR" \
             "$RUNNER_TEMP/$WORK_ROOT_DIR"
 
-      - name: Verify packaged runtime
+      - name: Verify shared ZIP
         run: |
           ROOT="$RUNNER_TEMP/$WORK_ROOT_DIR"
+          set -euo pipefail
+          PACKAGE="$(mktemp -d "$ROOT/shared-verify.XXXXXX")"
+          unzip -q "$ROOT/artifacts/ffmpeg-runtime-linux-x64-$LICENSE_FLAVOR-shared-$FFMPEG_VERSION.zip" -d "$PACKAGE"
+          bash tools/verify_linux_glibc.sh "$PACKAGE"/*.so.*
           gcc -O2 -Wall -Wextra -I"$ROOT/install/include" -I"$ROOT/subtitle-install/include" -I"$ROOT/disc-install/include" tools/verify_runtime.c \
-            "$ROOT/package/libavformat.so.63" \
-            "$ROOT/package/libavcodec.so.63" \
-            "$ROOT/package/libavutil.so.61" \
-            "$ROOT/package/libavdevice.so.63" \
-            "$ROOT/package/libavfilter.so.12" \
-            "$ROOT/package/libswscale.so.10" \
-            "$ROOT/package/libswresample.so.7" \
-            -Wl,-rpath,'$ORIGIN' -Wl,-rpath-link,"$ROOT/package" \
-            -o "$ROOT/package/verify_runtime"
-          "$ROOT/package/verify_runtime"
+            "$PACKAGE/libavformat.so.63" \
+            "$PACKAGE/libavcodec.so.63" \
+            "$PACKAGE/libavutil.so.61" \
+            "$PACKAGE/libavdevice.so.63" \
+            "$PACKAGE/libavfilter.so.12" \
+            "$PACKAGE/libswscale.so.10" \
+            "$PACKAGE/libswresample.so.7" \
+            -Wl,-rpath,'$ORIGIN' -Wl,-rpath-link,"$PACKAGE" \
+            -o "$PACKAGE/verify_runtime"
+          "$PACKAGE/verify_runtime"
 
-      - name: Upload runtime artifact
+      - name: Upload shared artifact
         uses: actions/upload-artifact@v4
         with:
           name: ffmpeg-runtime-linux-x64-${{ env.LICENSE_FLAVOR }}-shared-${{ env.FFMPEG_VERSION }}
-          path: ${{ runner.temp }}/ffmpeg-runtime-build/artifacts/*.zip
+          path: ${{ runner.temp }}/ffmpeg-runtime-build/artifacts/ffmpeg-runtime-linux-x64-${{ env.LICENSE_FLAVOR }}-shared-${{ env.FFMPEG_VERSION }}.zip
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Verify static ZIP
+        id: verify-static
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: |
+          ROOT="$RUNNER_TEMP/$WORK_ROOT_DIR"
+          bash tools/verify_ffmpeg_static.sh linux "$ROOT/artifacts/ffmpeg-runtime-linux-x64-$LICENSE_FLAVOR-static-$FFMPEG_VERSION.zip"
+
+      - name: Upload static artifact
+        if: ${{ !cancelled() && steps.verify-static.outcome == 'success' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ffmpeg-runtime-linux-x64-${{ env.LICENSE_FLAVOR }}-static-${{ env.FFMPEG_VERSION }}
+          path: ${{ runner.temp }}/ffmpeg-runtime-build/artifacts/ffmpeg-runtime-linux-x64-${{ env.LICENSE_FLAVOR }}-static-${{ env.FFMPEG_VERSION }}.zip
           if-no-files-found: error
           retention-days: 14

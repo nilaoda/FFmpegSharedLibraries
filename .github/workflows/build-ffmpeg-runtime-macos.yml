@@ -20,7 +20,8 @@ jobs:
       - name: Install native build tools
         run: brew install meson ninja nasm
 
-      - name: Build runtime
+      - name: Build runtimes
+        id: build
         run: |
           chmod +x tools/build_ffmpeg_runtime_macos.sh
           tools/build_ffmpeg_runtime_macos.sh \
@@ -28,24 +29,43 @@ jobs:
             "$LICENSE_FLAVOR" \
             "$RUNNER_TEMP/$WORK_ROOT_DIR"
 
-      - name: Verify packaged runtime
+      - name: Verify shared ZIP
         run: |
           ROOT="$RUNNER_TEMP/$WORK_ROOT_DIR"
+          set -euo pipefail
+          PACKAGE="$(mktemp -d "$ROOT/shared-verify.XXXXXX")"
+          unzip -q "$ROOT/artifacts/ffmpeg-runtime-osx-arm64-$LICENSE_FLAVOR-shared-$FFMPEG_VERSION.zip" -d "$PACKAGE"
           clang -O2 -Wall -Wextra -I"$ROOT/install/include" -I"$ROOT/subtitle-install/include" -I"$ROOT/disc-install/include" tools/verify_runtime.c \
-            "$ROOT/package/libavformat.63.dylib" \
-            "$ROOT/package/libavcodec.63.dylib" \
-            "$ROOT/package/libavutil.61.dylib" \
-            "$ROOT/package/libavdevice.63.dylib" \
-            "$ROOT/package/libavfilter.12.dylib" \
-            "$ROOT/package/libswscale.10.dylib" \
-            "$ROOT/package/libswresample.7.dylib" \
-            -o "$ROOT/package/verify_runtime"
-          "$ROOT/package/verify_runtime"
+            "$PACKAGE/libavformat.63.dylib" \
+            "$PACKAGE/libavcodec.63.dylib" \
+            "$PACKAGE/libavutil.61.dylib" \
+            "$PACKAGE/libavdevice.63.dylib" \
+            "$PACKAGE/libavfilter.12.dylib" \
+            "$PACKAGE/libswscale.10.dylib" \
+            "$PACKAGE/libswresample.7.dylib" \
+            -o "$PACKAGE/verify_runtime"
+          "$PACKAGE/verify_runtime"
 
-      - name: Upload runtime artifact
+      - name: Upload shared artifact
         uses: actions/upload-artifact@v4
         with:
           name: ffmpeg-runtime-osx-arm64-${{ env.LICENSE_FLAVOR }}-shared-${{ env.FFMPEG_VERSION }}
-          path: ${{ runner.temp }}/ffmpeg-runtime-build/artifacts/*.zip
+          path: ${{ runner.temp }}/ffmpeg-runtime-build/artifacts/ffmpeg-runtime-osx-arm64-${{ env.LICENSE_FLAVOR }}-shared-${{ env.FFMPEG_VERSION }}.zip
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Verify static ZIP
+        id: verify-static
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: |
+          ROOT="$RUNNER_TEMP/$WORK_ROOT_DIR"
+          bash tools/verify_ffmpeg_static.sh macos "$ROOT/artifacts/ffmpeg-runtime-osx-arm64-$LICENSE_FLAVOR-static-$FFMPEG_VERSION.zip"
+
+      - name: Upload static artifact
+        if: ${{ !cancelled() && steps.verify-static.outcome == 'success' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ffmpeg-runtime-osx-arm64-${{ env.LICENSE_FLAVOR }}-static-${{ env.FFMPEG_VERSION }}
+          path: ${{ runner.temp }}/ffmpeg-runtime-build/artifacts/ffmpeg-runtime-osx-arm64-${{ env.LICENSE_FLAVOR }}-static-${{ env.FFMPEG_VERSION }}.zip
           if-no-files-found: error
           retention-days: 14

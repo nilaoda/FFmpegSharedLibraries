@@ -53,7 +53,7 @@ while IFS= read -r member; do
     mv "$ASS_EMBED_DIRECTORY/$member" "$ASS_EMBED_DIRECTORY/$normalized"
     member="$normalized"
   fi
-  printf 'SHLIBOBJS-$(CONFIG_LIBASS) += libass-embedded/%s\n' "$member" >> "$ASS_EMBED_MAKEFILE"
+  printf 'OBJS-$(CONFIG_LIBASS) += libass-embedded/%s\n' "$member" >> "$ASS_EMBED_MAKEFILE"
 done <<< "$ASS_EMBED_MEMBERS"
 
 # 只加入上游公开接口；重复运行时先移除此前生成的条目。
