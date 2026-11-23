@@ -8,6 +8,19 @@ work_root="${4:?Missing build work root}"
 install_root="${5:?Missing FFmpeg install directory}"
 config_mak="${6:?Missing FFmpeg config.mak}"
 artifact="${7:?Missing output ZIP path}"
+target="${8:-}"
+case "$platform:$target" in
+  windows:|windows:win64|windows:win-arm64)
+    [[ -n "$target" ]] && target_arch="$target" || target_arch=win64
+    ;;
+  linux:|macos:)
+    target_arch=""
+    ;;
+  *)
+    echo "Unsupported target platform/architecture: $platform:$target" >&2
+    exit 1
+    ;;
+esac
 artifact="$(cd "$(dirname "$artifact")" && pwd)/$(basename "$artifact")"
 
 stage="$(mktemp -d "$(dirname "$artifact")/.static-package.XXXXXX")"
@@ -71,7 +84,11 @@ for flag in "${extra_flags[@]}"; do
       if [[ ! -f "$stage/lib/libiconv.a" ]]; then
         iconv_archive="$flag"
         if [[ "$flag" == -liconv ]]; then
-          iconv_archive="$(gcc -print-file-name=libiconv.a)"
+          if [[ "$target_arch" == win-arm64 ]]; then
+            iconv_archive="$(clang -print-file-name=libiconv.a)"
+          else
+            iconv_archive="$(gcc -print-file-name=libiconv.a)"
+          fi
         fi
         cp "$iconv_archive" "$stage/lib/libiconv.a"
       fi
@@ -86,7 +103,13 @@ for flag in "${extra_flags[@]}"; do
   esac
 done
 if [[ "$platform" == windows ]]; then
-  link_flags+=(-static-libgcc -static-libstdc++)
+  if [[ "$target_arch" == win-arm64 ]]; then
+    # clang 的 MinGW 驱动：-static-libstdc++ 提供静态 libc++（含 unwind）；
+    # MSYS2 clang 23.x 不接受 -static-unwindlib；-static-libgcc 为空操作。
+    link_flags+=(-static-libstdc++)
+  else
+    link_flags+=(-static-libgcc -static-libstdc++)
+  fi
 elif [[ "$platform" == linux ]]; then
   link_flags+=(-static-libgcc)
 fi
@@ -106,6 +129,9 @@ EOF
 {
   echo "FFmpeg version: $version"
   echo "Target: $platform"
+  if [[ "$platform" == windows && "$target_arch" == win-arm64 ]]; then
+    echo "Target architecture: win-arm64"
+  fi
   echo "License flavor: $license_flavor"
   sed -n 's/^FFMPEG_CONFIGURATION=/Configure flags: /p' "$config_mak"
   cat "$work_root/encoder-install/versions.txt" "$work_root/subtitle-install/versions.txt"

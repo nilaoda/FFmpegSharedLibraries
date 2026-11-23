@@ -1,16 +1,27 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Build a self-contained Windows x64 FFmpeg runtime:
+# Build a self-contained Windows FFmpeg runtime (win64 or win-arm64):
 # - FFmpeg shared DLLs are packaged
 # - libuavs3d is built as a static dependency and linked into FFmpeg
 # - D3D11VA and DXVA2 hardware decoding are enabled through Windows system APIs
 # - unexpected non-system DLL dependencies are treated as build failures
 # 软件编码器由公共依赖脚本构建，并通过显式白名单启用。
+# win64 使用 MSYS2 MINGW64 GCC；win-arm64 使用 CLANGARM64 LLVM/Clang 原生构建。
 
-FFMPEG_VERSION="${1:?usage: build_ffmpeg_runtime_windows.sh <ffmpeg-version> <gpl|lgpl> [work-root] }"
-LICENSE_FLAVOR="${2:?usage: build_ffmpeg_runtime_windows.sh <ffmpeg-version> <gpl|lgpl> [work-root] }"
+FFMPEG_VERSION="${1:?usage: build_ffmpeg_runtime_windows.sh <ffmpeg-version> <gpl|lgpl> [work-root] [win64|win-arm64] }"
+LICENSE_FLAVOR="${2:?usage: build_ffmpeg_runtime_windows.sh <ffmpeg-version> <gpl|lgpl> [work-root] [win64|win-arm64] }"
 WORK_ROOT="${3:-$PWD/.ffmpeg-runtime-build-win64}"
+# 默认保持 win64；MSYS2 在 ARM64 上 uname 仍报告 x86_64，因此不自动探测。
+TARGET_ARCH="${4:-win64}"
+case "$TARGET_ARCH" in
+  win64|win-arm64)
+    ;;
+  *)
+    echo "Unsupported Windows target architecture: $TARGET_ARCH" >&2
+    exit 1
+    ;;
+esac
 mkdir -p "$WORK_ROOT"
 WORK_ROOT="$(cd "$WORK_ROOT" && pwd)"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -60,7 +71,7 @@ INSTALL_ROOT="$WORK_ROOT/install"
 PACKAGE_ROOT="$WORK_ROOT/package"
 RUNTIME_ROOT="$PACKAGE_ROOT"
 ARTIFACT_ROOT="$WORK_ROOT/artifacts"
-PACKAGE_NAME="ffmpeg-runtime-win64-$LICENSE_FLAVOR-shared-$FFMPEG_VERSION"
+PACKAGE_NAME="ffmpeg-runtime-$TARGET_ARCH-$LICENSE_FLAVOR-shared-$FFMPEG_VERSION"
 ARTIFACT_PATH="$ARTIFACT_ROOT/$PACKAGE_NAME.zip"
 PKG_CONFIG_BIN="${PKG_CONFIG_BIN:-pkgconf}"
 CPU_COUNT="${BUILD_JOBS:-$(nproc)}"
@@ -106,12 +117,44 @@ SYSTEM_DLL_PATTERNS=(
   EXT-MS-WIN-*.DLL
 )
 
-# FFmpeg 会把单独的 -lstdc++ 移交给 g++ 驱动；将静态库组保持为一个链接参数，
-# 保证切换驱动后仍按 C++ 运行时、线程库的顺序解析引用。
-STATIC_CXX_LIBS="-Wl,-Bstatic,-lstdc++,-lwinpthread,-Bdynamic"
+if [[ "$TARGET_ARCH" == "win-arm64" ]]; then
+  # CLANGARM64：LLVM/Clang + UCRT + libc++，lld 链接；没有 GNU 工具链。
+  # ar/nm 等由 llvm-tools 的同名 shim 提供；clang 的 MinGW 驱动支持
+  # -static-libstdc++（静态 libc++，MSYS2 构建时已内含 libc++abi/libunwind）。
+  # -static-libgcc 是空操作（compiler-rt），本环境无 libgcc；
+  # MSYS2 clang 23.x 不接受 -static-unwindlib（实测），unwind 由 libc++.a 自身提供。
+  WIN_CC=clang
+  WIN_CXX=clang++
+  STATIC_CXX_LIBS="-Wl,-Bstatic,-lc++,-lwinpthread,-Bdynamic"
+  STATIC_RUNTIME_FLAGS=(-static-libstdc++)
+  FF_PKG_CONFIG_ARCH=win-arm64
+else
+  WIN_CC=gcc
+  WIN_CXX=g++
+  STATIC_CXX_LIBS="-Wl,-Bstatic,-lstdc++,-lwinpthread,-Bdynamic"
+  STATIC_RUNTIME_FLAGS=(-static-libgcc -static-libstdc++)
+  FF_PKG_CONFIG_ARCH=win64
+fi
 
+# FFmpeg 会把单独的 -lstdc++/-lc++ 移交给 C++ 驱动；将静态库组保持为一个链接参数，
+# 保证切换驱动后仍按 C++ 运行时、线程库的顺序解析引用。
+# llvm-objdump 的 COFF 导入表输出与 GNU objdump 不完全一致，先按 GNU 格式解析，
+# 再回退到 llvm-readobj；两者都解析不出但确实存在导入表时按失败处理。
 dll_dependencies() {
-  objdump -p "$1" | awk '/DLL Name:/{print $3}' | sort -u
+  local binary="$1" names imports_raw readobj
+  names="$(objdump -p "$binary" | awk '/DLL Name:/{print $3}' | sort -u)"
+  if [[ -z "$names" ]]; then
+    # -print-prog-name 只打印解析出的路径；先取路径再单独调用。
+    readobj="$("$WIN_CC" -print-prog-name=llvm-readobj)"
+    imports_raw="$("$readobj" --coff-imports "$binary")"
+    names="$(printf '%s\n' "$imports_raw" | awk '/^ +Name: /{print $2}' | sort -u)"
+    if [[ -z "$names" && "$(printf '%s\n' "$imports_raw" | grep -c '^Import {')" -gt 0 ]]; then
+      echo "Could not parse the import table of $binary" >&2
+      printf '%s\n' "$imports_raw" >&2
+      exit 1
+    fi
+  fi
+  printf '%s\n' "$names"
 }
 
 is_system_dll() {
@@ -132,9 +175,9 @@ mkdir -p "$SOURCE_ROOT" "$INSTALL_ROOT" "$RUNTIME_ROOT" "$ARTIFACT_ROOT"
 # 同时检查直接 pthread 调用与 C++ 线程引用，禁止混入动态线程或 C++ 运行库。
 verify_static_linkage() {
   local driver dependency dependency_upper
-  g++ -O2 -c "$SCRIPT_DIR/verify_windows_linkage.cpp" -o "$WORK_ROOT/linkage-probe.o"
-  for driver in gcc g++; do
-    "$driver" -static-libgcc -static-libstdc++ "$WORK_ROOT/linkage-probe.o" \
+  "$WIN_CXX" -O2 -c "$SCRIPT_DIR/verify_windows_linkage.cpp" -o "$WORK_ROOT/linkage-probe.o"
+  for driver in "$WIN_CC" "$WIN_CXX"; do
+    "$driver" "${STATIC_RUNTIME_FLAGS[@]}" "$WORK_ROOT/linkage-probe.o" \
       "$@" "$STATIC_CXX_LIBS" -o "$WORK_ROOT/linkage-probe.exe"
     objdump -p "$WORK_ROOT/linkage-probe.exe" > "$WORK_ROOT/linkage-probe.imports.txt"
     while IFS= read -r dependency; do
@@ -160,6 +203,10 @@ fi
 
 rm -rf "$SOURCE_DIR"
 tar -xf "$SOURCE_ARCHIVE" -C "$SOURCE_ROOT"
+# Release tarball 自带大写 VERSION 文件（仅记录版本号）；Windows 文件系统大小写
+# 不敏感，FFmpeg 9 的 WinRT 采集 filter 经 wrl/client.h → libc++ <cstddef> 引入
+# <version> 时会命中它并解析失败。构建只读取 RELEASE，VERSION 可安全删除。
+rm -f "$SOURCE_DIR/VERSION" "$SOURCE_DIR/version"
 
 # Apply exactly to this extracted tree, even when WORK_ROOT is inside this repository.
 patch -d "$SOURCE_DIR" -p1 --batch --forward --fuzz=0 --dry-run <"$FFMPEG_RUNTIME_PATCH_PATH" >/dev/null
@@ -191,6 +238,21 @@ git init "$UAVS3D_SOURCE_DIR" >/dev/null
 git -C "$UAVS3D_SOURCE_DIR" remote add origin "$UAVS3D_GIT_URL"
 git -C "$UAVS3D_SOURCE_DIR" fetch --depth 1 origin "$UAVS3D_GIT_REF"
 git -C "$UAVS3D_SOURCE_DIR" checkout --detach FETCH_HEAD
+# Windows COFF 汇编宏与 CMake ARM64 处理器大小写匹配；ELF/Mach-O 行为不变。
+patch -d "$UAVS3D_SOURCE_DIR" -p1 --batch --forward --fuzz=0 \
+  <"$REPO_ROOT/patches/uavs3d/0001-arm64-windows-coff-assembly-and-cmake-arch.patch"
+
+if [[ "$TARGET_ARCH" == "win-arm64" ]]; then
+  # x18 是 Windows ARM64 的平台保留寄存器（TEB/模式状态）；NEON 汇编不得触碰。
+  # 预处理 10-bit 构建实际编译的汇编单元后逐条检查。
+  for asm_unit in "$UAVS3D_SOURCE_DIR"/source/decore/arm64/*.S; do
+    if "$WIN_CC" -E -x assembler-with-cpp -DCOMPILE_10BIT=1 -D_arm64 \
+        "$asm_unit" | grep -nE '(^|[^A-Za-z0-9_])[xw]18([^A-Za-z0-9_]|$)' >/dev/null; then
+      echo "ARM64 assembly uses the platform-reserved x18/w18 register: $asm_unit" >&2
+      exit 1
+    fi
+  done
+fi
 
 cmake -S "$UAVS3D_SOURCE_DIR" \
   -B "$UAVS3D_BUILD_DIR" \
@@ -206,6 +268,17 @@ cmake --install "$UAVS3D_BUILD_DIR"
 if [[ ! -f "$UAVS3D_INSTALL_ROOT/lib/libuavs3d.a" ]]; then
   echo "Static libuavs3d archive was not produced" >&2
   exit 1
+fi
+
+if [[ "$TARGET_ARCH" == "win-arm64" ]]; then
+  # CMake 架构分支若未命中（例如把 ARM64 误判为 generic）会静默退回通用 C；
+  # 以 NEON 符号计数确认汇编与分派代码确实进入产物。
+  neon_symbols="$(nm "$UAVS3D_INSTALL_ROOT/lib/libuavs3d.a" 2>/dev/null | grep -c ' T uavs3d_.*_arm64')"
+  if [[ "$neon_symbols" -lt 40 ]]; then
+    echo "ARM64 NEON dispatch is missing from libuavs3d.a (found $neon_symbols symbols)" >&2
+    exit 1
+  fi
+  echo "libuavs3d ARM64 NEON symbols: $neon_symbols"
 fi
 
 if find "$UAVS3D_INSTALL_ROOT" -type f \( -name 'libuavs3d*.dll' -o -name 'uavs3d*.dll' \) | grep -q .; then
@@ -238,7 +311,17 @@ if [[ "$LICENSE_FLAVOR" == "gpl" ]]; then
   git -C "$DAVS2_SOURCE_DIR" config core.autocrlf false
   git -C "$DAVS2_SOURCE_DIR" checkout --detach FETCH_HEAD
 
-  for davs2_patch_path in "$DAVS2_PATCH_PATH" "$DAVS2_COMPAT_PATCH_PATH" "$DAVS2_COLOR_PATCH_PATH" "$DAVS2_MC_PATCH_PATH"; do
+  # AArch64 使用 NEON intrinsics 补丁组；x86_64 保留 AVX2 运动补偿补丁。
+  if [[ "$TARGET_ARCH" == "win-arm64" ]]; then
+    DAVS2_PATCHES=("$DAVS2_PATCH_PATH" "$DAVS2_COMPAT_PATCH_PATH")
+    for davs2_arm_patch in "$REPO_ROOT"/patches/davs2-10bit/aarch64/*.patch; do
+      DAVS2_PATCHES+=("$davs2_arm_patch")
+    done
+    DAVS2_PATCHES+=("$DAVS2_COLOR_PATCH_PATH")
+  else
+    DAVS2_PATCHES=("$DAVS2_PATCH_PATH" "$DAVS2_COMPAT_PATCH_PATH" "$DAVS2_COLOR_PATCH_PATH" "$DAVS2_MC_PATCH_PATH")
+  fi
+  for davs2_patch_path in "${DAVS2_PATCHES[@]}"; do
     if [[ ! -f "$davs2_patch_path" ]]; then
       echo "Missing davs2 patch file: $davs2_patch_path" >&2
       exit 1
@@ -269,11 +352,17 @@ if [[ "$LICENSE_FLAVOR" == "gpl" ]]; then
   fi
 
   pushd "$DAVS2_CONFIGURE_DIR" >/dev/null
-  ./configure \
-    --prefix="$DAVS2_INSTALL_ROOT" \
-    --disable-cli \
-    --enable-pic \
-    --bit-depth=10
+  # MSYS2 层 uname 在 ARM64 上报告 x86_64，host 必须显式传入。
+  # 上游 fork 未附带 aarch64 汇编源文件；禁用汇编后 Makefile 跳过该分支，
+  # NEON 由 intrinsics 补丁经 ARCH_AARCH64 守卫提供（与 macOS arm64 一致）。
+  DAVS2_CONFIGURE_FLAGS=(--prefix="$DAVS2_INSTALL_ROOT" --disable-cli --enable-pic --bit-depth=10)
+  if [[ "$TARGET_ARCH" == "win-arm64" ]]; then
+    # 上游默认 CC=g++；CLANGARM64 没有 g++，改用 LLVM。
+    CC=clang CXX=clang++ ./configure "${DAVS2_CONFIGURE_FLAGS[@]}" \
+      --host=aarch64-w64-mingw32 --disable-asm
+  else
+    ./configure "${DAVS2_CONFIGURE_FLAGS[@]}"
+  fi
   make -j"$CPU_COUNT"
   make install-lib-static
   popd >/dev/null
@@ -317,7 +406,7 @@ bash "$SCRIPT_DIR/embed_libass.sh" "$SOURCE_DIR" "$SUBTITLE_INSTALL_ROOT"
 PKG_CONFIG_BIN="$PKG_CONFIG_BIN" bash "$SCRIPT_DIR/build_disc_runtime.sh" windows "$LICENSE_FLAVOR" "$WORK_ROOT" "$CPU_COUNT"
 bash "$SCRIPT_DIR/embed_discs.sh" "$SOURCE_DIR" "$DISC_INSTALL_ROOT" "$LICENSE_FLAVOR"
 
-PKG_CONFIG_BIN="$PKG_CONFIG_BIN" bash "$SCRIPT_DIR/build_encoder_runtime.sh" windows "$LICENSE_FLAVOR" "$WORK_ROOT" "$CPU_COUNT"
+PKG_CONFIG_BIN="$PKG_CONFIG_BIN" bash "$SCRIPT_DIR/build_encoder_runtime.sh" windows "$LICENSE_FLAVOR" "$WORK_ROOT" "$CPU_COUNT" "$TARGET_ARCH"
 source "$ENCODER_INSTALL_ROOT/ffmpeg-options.sh"
 
 PKG_CONFIG_PATH_ENTRIES=("$ENCODER_INSTALL_ROOT/lib/pkgconfig" "$UAVS3D_INSTALL_ROOT/lib/pkgconfig" "$SUBTITLE_INSTALL_ROOT/lib/pkgconfig" "$DISC_INSTALL_ROOT/lib/pkgconfig")
@@ -334,6 +423,7 @@ export LDFLAGS="-L$ENCODER_INSTALL_ROOT/lib${LDFLAGS:+ $LDFLAGS}"
 
 # 统一处理所有依赖的线程链接参数，避免新编码库的 -lpthread 抢先引入导入库。
 export FFMPEG_PKG_CONFIG_BIN="$PKG_CONFIG_BIN"
+export FFMPEG_TARGET_ARCH="$FF_PKG_CONFIG_ARCH"
 PKG_CONFIG_BIN="$SCRIPT_DIR/pkg_config_windows_static.sh"
 ENCODER_LINK_PACKAGES=(vpx aom opus)
 if [[ "$LICENSE_FLAVOR" == gpl ]]; then
@@ -350,14 +440,18 @@ rm -rf "$STATIC_SOURCE_DIR"
 cp -R "$SOURCE_DIR" "$STATIC_SOURCE_DIR"
 
 CONFIGURE_FLAGS=(
-  --arch=x86_64
+  --arch=$([[ "$TARGET_ARCH" == "win-arm64" ]] && echo aarch64 || echo x86_64)
   --target-os=mingw32
-  --cc=gcc
-  --cxx=g++
+  --cc="$WIN_CC"
+  --cxx="$WIN_CXX"
   --ar=ar
   --nm=nm
-  --ranlib=ranlib
-  --windres=windres
+)
+if [[ "$TARGET_ARCH" == "win64" ]]; then
+  # mingw32 分支强制 ranlib=:，且禁用程序后 windres 不会被调用；x64 保留原有显式参数。
+  CONFIGURE_FLAGS+=(--ranlib=ranlib --windres=windres)
+fi
+CONFIGURE_FLAGS+=(
   --pkg-config="$PKG_CONFIG_BIN"
   --pkg-config-flags=--static
   --disable-programs
@@ -374,7 +468,7 @@ CONFIGURE_FLAGS=(
   --disable-devices
   --enable-d3d11va
   --enable-dxva2
-  --extra-ldflags=-static-libgcc\ -static-libstdc++
+  "--extra-ldflags=${STATIC_RUNTIME_FLAGS[*]}"
   "--extra-libs=$STATIC_CXX_LIBS"
 )
 
@@ -447,6 +541,7 @@ done
 {
   echo "FFmpeg version: $FFMPEG_VERSION"
   echo "License flavor: $LICENSE_FLAVOR"
+  echo "Target architecture: $TARGET_ARCH"
   echo "Blu-ray dependencies (static): libbluray 1.5.0, libudfread 1.2.0"
   if [[ "$LICENSE_FLAVOR" == gpl ]]; then
     echo "DVD dependencies (static): libdvdread 7.1.1, libdvdnav 7.0.0, libdvdcss 1.6.0"
@@ -455,11 +550,17 @@ done
   echo "Enable libuavs3d: true"
   echo "libuavs3d linkage: static"
   echo "libuavs3d revision: $UAVS3D_GIT_REF"
+  if [[ "$TARGET_ARCH" == "win-arm64" ]]; then
+    echo "libuavs3d SIMD: AArch64 NEON"
+  fi
   echo "Enable libdavs2: $ENABLE_LIBDAVS2"
   if [[ "$ENABLE_LIBDAVS2" == true ]]; then
     echo "libdavs2 linkage: static"
     echo "libdavs2 revision: $DAVS2_GIT_REF"
     echo "libdavs2 bit depth: 10"
+    if [[ "$TARGET_ARCH" == "win-arm64" ]]; then
+      echo "libdavs2 SIMD: AArch64 NEON intrinsics (upstream asm disabled)"
+    fi
   fi
   cat "$SUBTITLE_INSTALL_ROOT/versions.txt"
   cat "$ENCODER_INSTALL_ROOT/versions.txt"
@@ -508,4 +609,4 @@ echo "Created artifact: $ARTIFACT_PATH"
 build_ffmpeg "$STATIC_SOURCE_DIR" "$STATIC_INSTALL_ROOT" --disable-shared --enable-static
 bash "$SCRIPT_DIR/package_ffmpeg_static.sh" windows "$FFMPEG_VERSION" "$LICENSE_FLAVOR" \
   "$WORK_ROOT" "$STATIC_INSTALL_ROOT" "$STATIC_SOURCE_DIR/ffbuild/config.mak" \
-  "$ARTIFACT_ROOT/${PACKAGE_NAME/-shared-/-static-}.zip"
+  "$ARTIFACT_ROOT/${PACKAGE_NAME/-shared-/-static-}.zip" "$TARGET_ARCH"

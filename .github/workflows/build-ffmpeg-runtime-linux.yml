@@ -1,4 +1,4 @@
-name: FFmpeg Runtime Linux x64 (9.0.2 GPL)
+name: FFmpeg Runtime Linux x64/arm64 (9.0.2 GPL)
 
 on:
   workflow_dispatch:
@@ -9,9 +9,17 @@ env:
   WORK_ROOT_DIR: ffmpeg-runtime-build
 
 jobs:
-  build-linux-x64-runtime:
-    name: Build FFmpeg Runtime [linux-x64]
-    runs-on: ubuntu-24.04
+  build-linux-runtime:
+    name: Build FFmpeg Runtime [${{ matrix.arch }}]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: linux-x64
+            runner: ubuntu-24.04
+          - arch: linux-arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
 
     steps:
       - uses: actions/checkout@v4
@@ -44,14 +52,24 @@ jobs:
           tools/build_ffmpeg_runtime_linux.sh \
             "$FFMPEG_VERSION" \
             "$LICENSE_FLAVOR" \
-            "$RUNNER_TEMP/$WORK_ROOT_DIR"
+            "$RUNNER_TEMP/$WORK_ROOT_DIR" \
+            "${{ matrix.arch }}"
 
       - name: Verify shared ZIP
         run: |
           ROOT="$RUNNER_TEMP/$WORK_ROOT_DIR"
           set -euo pipefail
           PACKAGE="$(mktemp -d "$ROOT/shared-verify.XXXXXX")"
-          unzip -q "$ROOT/artifacts/ffmpeg-runtime-linux-x64-$LICENSE_FLAVOR-shared-$FFMPEG_VERSION.zip" -d "$PACKAGE"
+          unzip -q "$ROOT/artifacts/ffmpeg-runtime-${{ matrix.arch }}-$LICENSE_FLAVOR-shared-$FFMPEG_VERSION.zip" -d "$PACKAGE"
+          expected_elf="AArch64"
+          if [ "${{ matrix.arch }}" = "linux-x64" ]; then expected_elf="Advanced Micro Devices X86-64"; fi
+          for so_file in "$PACKAGE"/*.so.*; do
+            machine="$(readelf -h "$so_file" | awk '/Machine:/{sub(/^.*Machine:[[:space:]]*/, ""); print}')"
+            if [ "$machine" != "$expected_elf" ]; then
+              echo "Unexpected ELF architecture in $so_file: $machine" >&2
+              exit 1
+            fi
+          done
           bash tools/verify_linux_glibc.sh "$PACKAGE"/*.so.*
           gcc -O2 -Wall -Wextra -I"$ROOT/install/include" -I"$ROOT/subtitle-install/include" -I"$ROOT/disc-install/include" tools/verify_runtime.c \
             "$PACKAGE/libavformat.so.63" \
@@ -68,8 +86,8 @@ jobs:
       - name: Upload shared artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ffmpeg-runtime-linux-x64-${{ env.LICENSE_FLAVOR }}-shared-${{ env.FFMPEG_VERSION }}
-          path: ${{ runner.temp }}/ffmpeg-runtime-build/artifacts/ffmpeg-runtime-linux-x64-${{ env.LICENSE_FLAVOR }}-shared-${{ env.FFMPEG_VERSION }}.zip
+          name: ffmpeg-runtime-${{ matrix.arch }}-${{ env.LICENSE_FLAVOR }}-shared-${{ env.FFMPEG_VERSION }}
+          path: ${{ runner.temp }}/ffmpeg-runtime-build/artifacts/ffmpeg-runtime-${{ matrix.arch }}-${{ env.LICENSE_FLAVOR }}-shared-${{ env.FFMPEG_VERSION }}.zip
           if-no-files-found: error
           retention-days: 14
 
@@ -78,13 +96,13 @@ jobs:
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: |
           ROOT="$RUNNER_TEMP/$WORK_ROOT_DIR"
-          bash tools/verify_ffmpeg_static.sh linux "$ROOT/artifacts/ffmpeg-runtime-linux-x64-$LICENSE_FLAVOR-static-$FFMPEG_VERSION.zip"
+          bash tools/verify_ffmpeg_static.sh linux "$ROOT/artifacts/ffmpeg-runtime-${{ matrix.arch }}-$LICENSE_FLAVOR-static-$FFMPEG_VERSION.zip"
 
       - name: Upload static artifact
         if: ${{ !cancelled() && steps.verify-static.outcome == 'success' }}
         uses: actions/upload-artifact@v4
         with:
-          name: ffmpeg-runtime-linux-x64-${{ env.LICENSE_FLAVOR }}-static-${{ env.FFMPEG_VERSION }}
-          path: ${{ runner.temp }}/ffmpeg-runtime-build/artifacts/ffmpeg-runtime-linux-x64-${{ env.LICENSE_FLAVOR }}-static-${{ env.FFMPEG_VERSION }}.zip
+          name: ffmpeg-runtime-${{ matrix.arch }}-${{ env.LICENSE_FLAVOR }}-static-${{ env.FFMPEG_VERSION }}
+          path: ${{ runner.temp }}/ffmpeg-runtime-build/artifacts/ffmpeg-runtime-${{ matrix.arch }}-${{ env.LICENSE_FLAVOR }}-static-${{ env.FFMPEG_VERSION }}.zip
           if-no-files-found: error
           retention-days: 14

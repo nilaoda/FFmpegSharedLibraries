@@ -2,11 +2,18 @@
 set -euo pipefail
 
 normalize_link_flags() {
-  awk '
+  # FFMPEG_TARGET_ARCH 由主构建脚本导出；win64 保持原有 GCC 假设，
+  # win-arm64（LLVM/libc++）由驱动的 -static-libstdc++ 提供静态 libc++
+  # （归档内含 libc++abi/libunwind），pkg-config 的对应条目一并剥离。
+  local target_arch="${FFMPEG_TARGET_ARCH:-win64}"
+  awk -v target_arch="$target_arch" '
   {
     output = "";
     for (i = 1; i <= NF; ++i) {
       if ($i == "-lstdc++" || $i == "-lgcc_s" || $i == "-lgcc" || $i == "-lgcc_eh")
+        continue;
+      if (target_arch == "win-arm64" &&
+          ($i == "-lc++" || $i == "-lc++abi" || $i == "-lunwind"))
         continue;
       if ($i == "-lpthread" || $i == "-lwinpthread" || $i == "-pthread" || $i == "-pthreads")
         $i = "-Wl,-l:libwinpthread.a";

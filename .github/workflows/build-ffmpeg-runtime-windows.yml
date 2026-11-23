@@ -1,4 +1,4 @@
-name: FFmpeg Runtime Windows win64 (9.0.2 GPL)
+name: FFmpeg Runtime Windows win64/win-arm64 (9.0.2 GPL)
 
 on:
   workflow_dispatch:
@@ -16,10 +16,24 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Point pacman at the canonical MSYS2 repo
+        run: |
+          # mirror.msys2.org 重定向器可能长时间无响应（曾使 pacman 数据库同步挂起）。
+          # runner 镜像预装 MSYS2 于 C:\msys64；在 setup-msys2 复用它之前，
+          # 将 mirrorlist 改指源站 repo.msys2.org（路径结构与重定向器一致）。
+          $dir = 'C:\msys64\etc\pacman.d'
+          if (-not (Test-Path $dir)) { Write-Error "MSYS2 not found at $dir"; exit 1 }
+          Get-ChildItem "$dir\mirrorlist*" | ForEach-Object {
+            (Get-Content $_.FullName) -replace 'https://mirror\.msys2\.org/', 'https://repo.msys2.org/' |
+              Set-Content $_.FullName
+            Write-Host "rewritten $($_.Name)"
+          }
+
       - name: Setup MSYS2
         uses: msys2/setup-msys2@v2
         with:
           msystem: MINGW64
+          release: false
           update: true
           install: >-
             diffutils
@@ -82,5 +96,109 @@ jobs:
         with:
           name: ffmpeg-runtime-win64-${{ env.LICENSE_FLAVOR }}-static-${{ env.FFMPEG_VERSION }}
           path: ${{ runner.temp }}\ffmpeg-runtime-build\artifacts\ffmpeg-runtime-win64-${{ env.LICENSE_FLAVOR }}-static-${{ env.FFMPEG_VERSION }}.zip
+          if-no-files-found: error
+          retention-days: 14
+
+  build-win-arm64-runtime:
+    name: Build FFmpeg Runtime [win-arm64]
+    runs-on: windows-11-arm
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Point pacman at the canonical MSYS2 repo
+        run: |
+          # 与 win64 job 相同：改写预装 MSYS2 的 mirrorlist，绕过不稳定的重定向器。
+          $dir = 'C:\msys64\etc\pacman.d'
+          if (-not (Test-Path $dir)) { Write-Error "MSYS2 not found at $dir"; exit 1 }
+          Get-ChildItem "$dir\mirrorlist*" | ForEach-Object {
+            (Get-Content $_.FullName) -replace 'https://mirror\.msys2\.org/', 'https://repo.msys2.org/' |
+              Set-Content $_.FullName
+            Write-Host "rewritten $($_.Name)"
+          }
+
+      - name: Setup MSYS2 CLANGARM64
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: CLANGARM64
+          release: false
+          update: true
+          install: >-
+            diffutils
+            git
+            make
+            patch
+            unzip
+            zip
+            mingw-w64-clang-aarch64-clang
+            mingw-w64-clang-aarch64-libc++
+            mingw-w64-clang-aarch64-cmake
+            mingw-w64-clang-aarch64-meson
+            mingw-w64-clang-aarch64-ninja
+            mingw-w64-clang-aarch64-pkgconf
+
+      - name: Probe native ARM64 toolchain
+        shell: msys2 {0}
+        run: |
+          set -euo pipefail
+          chmod +x tools/probe_windows_toolchain.sh
+          # MSYS2 的 bash 可能运行在模拟层；以编译器 target 与 PE 机器类型判定架构。
+          tools/probe_windows_toolchain.sh clang clang++ aarch64-w64- ARM64
+
+      - name: Build runtimes
+        id: build
+        shell: msys2 {0}
+        run: |
+          chmod +x tools/build_ffmpeg_runtime_windows.sh
+          WORK_ROOT_UNIX="$(cygpath -u "$RUNNER_TEMP/$WORK_ROOT_DIR")"
+          tools/build_ffmpeg_runtime_windows.sh \
+            "$FFMPEG_VERSION" \
+            "$LICENSE_FLAVOR" \
+            "$WORK_ROOT_UNIX" \
+            win-arm64
+
+      - name: Verify shared ZIP
+        shell: msys2 {0}
+        run: |
+          ROOT="$(cygpath -u "$RUNNER_TEMP/$WORK_ROOT_DIR")"
+          set -euo pipefail
+          PACKAGE="$(mktemp -d "$ROOT/shared-verify.XXXXXX")"
+          unzip -q "$ROOT/artifacts/ffmpeg-runtime-win-arm64-$LICENSE_FLAVOR-shared-$FFMPEG_VERSION.zip" -d "$PACKAGE"
+          READOBJ="$(clang -print-prog-name=llvm-readobj)"
+          for dll in "$PACKAGE"/*.dll; do
+            if ! "$READOBJ" --file-headers "$dll" | grep -qi 'IMAGE_FILE_MACHINE_ARM64'; then
+              echo "Unexpected PE machine type in $dll:" >&2
+              "$READOBJ" --file-headers "$dll" | grep -i machine >&2
+              exit 1
+            fi
+          done
+          clang -O2 -Wall -Wextra -I"$ROOT/install/include" -I"$ROOT/subtitle-install/include" -I"$ROOT/disc-install/include" tools/verify_runtime.c \
+            -L"$ROOT/install/lib" -lavformat -lavcodec -lavutil \
+            -lavdevice -lavfilter -lswscale -lswresample \
+            -o "$PACKAGE/verify_runtime.exe"
+          "$PACKAGE/verify_runtime.exe"
+
+      - name: Upload shared artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ffmpeg-runtime-win-arm64-${{ env.LICENSE_FLAVOR }}-shared-${{ env.FFMPEG_VERSION }}
+          path: ${{ runner.temp }}\ffmpeg-runtime-build\artifacts\ffmpeg-runtime-win-arm64-${{ env.LICENSE_FLAVOR }}-shared-${{ env.FFMPEG_VERSION }}.zip
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Verify static ZIP
+        id: verify-static
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        shell: msys2 {0}
+        run: |
+          ROOT="$(cygpath -u "$RUNNER_TEMP/$WORK_ROOT_DIR")"
+          bash tools/verify_ffmpeg_static.sh windows "$ROOT/artifacts/ffmpeg-runtime-win-arm64-$LICENSE_FLAVOR-static-$FFMPEG_VERSION.zip" win-arm64
+
+      - name: Upload static artifact
+        if: ${{ !cancelled() && steps.verify-static.outcome == 'success' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ffmpeg-runtime-win-arm64-${{ env.LICENSE_FLAVOR }}-static-${{ env.FFMPEG_VERSION }}
+          path: ${{ runner.temp }}\ffmpeg-runtime-build\artifacts\ffmpeg-runtime-win-arm64-${{ env.LICENSE_FLAVOR }}-static-${{ env.FFMPEG_VERSION }}.zip
           if-no-files-found: error
           retention-days: 14

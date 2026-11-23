@@ -16,7 +16,7 @@
  #endif
  
 -#if ARCH_ARM
-+#if ARCH_ARM || ARCH_AARCH64
++#if (ARCH_ARM || ARCH_AARCH64) && !defined(_WIN32)
  #include <signal.h>
  #include <setjmp.h>
  static sigjmp_buf jmpbuf;
@@ -25,7 +25,7 @@
  }
  
 -#endif // if ARCH_ARM
-+#endif // if ARCH_ARM || ARCH_AARCH64
++#endif // if (ARCH_ARM || ARCH_AARCH64) && !defined(_WIN32)
  
  #ifdef __cplusplus
  extern "C" {

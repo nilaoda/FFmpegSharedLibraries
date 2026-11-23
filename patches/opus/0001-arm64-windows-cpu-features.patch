@@ -1,0 +1,36 @@
+diff --git a/celt/arm/armcpu.c b/celt/arm/armcpu.c
+index f03408c..b60898e 100644
+--- a/celt/arm/armcpu.c
++++ b/celt/arm/armcpu.c
+@@ -271,6 +271,31 @@ static opus_uint32 opus_cpu_capabilities(void)
+   return flags;
+ }
+ 
++#elif !defined(_MSC_VER) && defined(_WIN32)
++# define WIN32_LEAN_AND_MEAN
++# define WIN32_EXTRA_LEAN
++# include <windows.h>
++
++static OPUS_INLINE opus_uint32 opus_cpu_capabilities(void){
++  opus_uint32 flags;
++  flags=0;
++
++# if defined(OPUS_ARM_MAY_HAVE_EDSP) || defined(OPUS_ARM_MAY_HAVE_MEDIA) \
++ || defined(OPUS_ARM_MAY_HAVE_NEON) || defined(OPUS_ARM_MAY_HAVE_NEON_INTR)
++
++    flags |= OPUS_CPU_ARM_EDSP_FLAG | OPUS_CPU_ARM_MEDIA_FLAG | OPUS_CPU_ARM_NEON_FLAG;
++
++#  if defined(OPUS_ARM_MAY_HAVE_DOTPROD)
++  
++  if (IsProcessorFeaturePresent(PF_ARM_V82_DP_INSTRUCTIONS_AVAILABLE))
++  {
++    flags |= OPUS_CPU_ARM_DOTPROD_FLAG;
++  }
++#  endif
++# endif
++  return flags;
++}
++
+ #else
+ /* The feature registers which can tell us what the processor supports are
+  * accessible in privileged modes only, so we can't have a general user-space
