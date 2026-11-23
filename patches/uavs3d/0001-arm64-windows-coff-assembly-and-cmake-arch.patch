@@ -1,0 +1,39 @@
+diff --git a/source/CMakeLists.txt b/source/CMakeLists.txt
+index 316bdc4..b9f5515 100644
+--- a/source/CMakeLists.txt
++++ b/source/CMakeLists.txt
+@@ -15,7 +15,8 @@ elseif("${CMAKE_SYSTEM_PROCESSOR}" STREQUAL "i386" OR
+        "${CMAKE_SYSTEM_PROCESSOR}" STREQUAL "x86")
+   set(UAVS3D_TARGET_CPU "x86")
+ elseif("${CMAKE_SYSTEM_PROCESSOR}" MATCHES "aarch64" OR
+-       "${CMAKE_SYSTEM_PROCESSOR}" MATCHES "arm64")
++       "${CMAKE_SYSTEM_PROCESSOR}" MATCHES "arm64" OR
++       "${CMAKE_SYSTEM_PROCESSOR}" MATCHES "ARM64")
+   set(UAVS3D_TARGET_CPU "arm64")
+ elseif("${CMAKE_SYSTEM_PROCESSOR}" MATCHES "^arm")
+   set(UAVS3D_TARGET_CPU "armv7")
+diff --git a/source/decore/arm64/def_arm64.S b/source/decore/arm64/def_arm64.S
+index 82e267d..3e749f9 100644
+--- a/source/decore/arm64/def_arm64.S
++++ b/source/decore/arm64/def_arm64.S
+@@ -41,7 +41,7 @@
+     .global _\name
+     _\name:
+ .endm
+-#else
++#elif defined(__ELF__)
+ .macro function name
+     .text
+     .align 4
+@@ -49,4 +49,11 @@
+     .type   \name, %function
+     \name:
+ .endm
++#else
++.macro function name
++    .text
++    .align 4
++    .global \name
++    \name:
++.endm
+ #endif

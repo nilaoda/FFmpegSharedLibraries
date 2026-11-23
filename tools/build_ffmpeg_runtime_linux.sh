@@ -1,15 +1,31 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Build a self-contained Linux x64 FFmpeg runtime:
+# Build a self-contained Linux FFmpeg runtime (x64 or arm64):
 # - FFmpeg shared objects are packaged
 # - libuavs3d is built as a static dependency and linked into FFmpeg
 # - unexpected external shared-object dependencies are treated as build failures
 # - packaged FFmpeg libraries are rewritten to load sibling .so files from $ORIGIN
 
-FFMPEG_VERSION="${1:?usage: build_ffmpeg_runtime_linux.sh <ffmpeg-version> <gpl|lgpl> [work-root] }"
-LICENSE_FLAVOR="${2:?usage: build_ffmpeg_runtime_linux.sh <ffmpeg-version> <gpl|lgpl> [work-root] }"
+FFMPEG_VERSION="${1:?usage: build_ffmpeg_runtime_linux.sh <ffmpeg-version> <gpl|lgpl> [work-root] [linux-x64|linux-arm64] }"
+LICENSE_FLAVOR="${2:?usage: build_ffmpeg_runtime_linux.sh <ffmpeg-version> <gpl|lgpl> [work-root] [linux-x64|linux-arm64] }"
 WORK_ROOT="${3:-$PWD/.ffmpeg-runtime-build-linux-x64}"
+TARGET_ARCH="${4:-}"
+if [[ -z "$TARGET_ARCH" ]]; then
+  case "$(uname -m)" in
+    x86_64) TARGET_ARCH=linux-x64 ;;
+    aarch64) TARGET_ARCH=linux-arm64 ;;
+    *) echo "Cannot detect a supported Linux architecture from '$(uname -m)'; pass linux-x64 or linux-arm64 explicitly" >&2; exit 1 ;;
+  esac
+fi
+case "$TARGET_ARCH" in
+  linux-x64|linux-arm64)
+    ;;
+  *)
+    echo "Unsupported Linux target architecture: $TARGET_ARCH" >&2
+    exit 1
+    ;;
+esac
 mkdir -p "$WORK_ROOT"
 WORK_ROOT="$(cd "$WORK_ROOT" && pwd)"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -58,7 +74,7 @@ INSTALL_ROOT="$WORK_ROOT/install"
 PACKAGE_ROOT="$WORK_ROOT/package"
 RUNTIME_ROOT="$PACKAGE_ROOT"
 ARTIFACT_ROOT="$WORK_ROOT/artifacts"
-PACKAGE_NAME="ffmpeg-runtime-linux-x64-$LICENSE_FLAVOR-shared-$FFMPEG_VERSION"
+PACKAGE_NAME="ffmpeg-runtime-$TARGET_ARCH-$LICENSE_FLAVOR-shared-$FFMPEG_VERSION"
 ARTIFACT_PATH="$ARTIFACT_ROOT/$PACKAGE_NAME.zip"
 CPU_COUNT="${BUILD_JOBS:-$(nproc)}"
 PKG_CONFIG_BIN="${PKG_CONFIG_BIN:-pkg-config}"
@@ -97,9 +113,12 @@ SYSTEM_SO_PATTERNS=(
   librt.so.1
   libgcc_s.so.1
   libstdc++.so.6
-  ld-linux-x86-64.so.2
-  linux-vdso.so.1
 )
+case "$TARGET_ARCH" in
+  linux-x64) SYSTEM_SO_PATTERNS+=(ld-linux-x86-64.so.2) ;;
+  linux-arm64) SYSTEM_SO_PATTERNS+=(ld-linux-aarch64.so.1) ;;
+esac
+SYSTEM_SO_PATTERNS+=(linux-vdso.so.1)
 
 mkdir -p "$SOURCE_ROOT" "$INSTALL_ROOT" "$RUNTIME_ROOT" "$ARTIFACT_ROOT"
 
@@ -140,6 +159,9 @@ git init "$UAVS3D_SOURCE_DIR" >/dev/null
 git -C "$UAVS3D_SOURCE_DIR" remote add origin "$UAVS3D_GIT_URL"
 git -C "$UAVS3D_SOURCE_DIR" fetch --depth 1 origin "$UAVS3D_GIT_REF"
 git -C "$UAVS3D_SOURCE_DIR" checkout --detach FETCH_HEAD
+# Windows COFF 汇编宏与 CMake ARM64 处理器大小写匹配；ELF/Mach-O 行为不变。
+patch -d "$UAVS3D_SOURCE_DIR" -p1 --batch --forward --fuzz=0 \
+  <"$REPO_ROOT/patches/uavs3d/0001-arm64-windows-coff-assembly-and-cmake-arch.patch"
 
 cmake -S "$UAVS3D_SOURCE_DIR" \
   -B "$UAVS3D_BUILD_DIR" \
@@ -156,6 +178,16 @@ cmake --install "$UAVS3D_BUILD_DIR"
 if [[ ! -f "$UAVS3D_INSTALL_ROOT/lib/libuavs3d.a" ]]; then
   echo "Static libuavs3d archive was not produced" >&2
   exit 1
+fi
+
+if [[ "$TARGET_ARCH" == "linux-arm64" ]]; then
+  # CMake 架构分支若未命中会静默退回 generic C；以 NEON 符号计数确认优化代码进入产物。
+  neon_symbols="$(nm "$UAVS3D_INSTALL_ROOT/lib/libuavs3d.a" 2>/dev/null | grep -c ' T uavs3d_.*_arm64')"
+  if [[ "$neon_symbols" -lt 40 ]]; then
+    echo "ARM64 NEON dispatch is missing from libuavs3d.a (found $neon_symbols symbols)" >&2
+    exit 1
+  fi
+  echo "libuavs3d ARM64 NEON symbols: $neon_symbols"
 fi
 
 if find "$UAVS3D_INSTALL_ROOT/lib" -maxdepth 1 -name 'libuavs3d*.so*' | grep -q .; then
@@ -187,7 +219,17 @@ if [[ "$LICENSE_FLAVOR" == "gpl" ]]; then
   git -C "$DAVS2_SOURCE_DIR" fetch --depth 1 origin "$DAVS2_GIT_REF"
   git -C "$DAVS2_SOURCE_DIR" checkout --detach FETCH_HEAD
 
-  for davs2_patch_path in "$DAVS2_PATCH_PATH" "$DAVS2_COMPAT_PATCH_PATH" "$DAVS2_COLOR_PATCH_PATH" "$DAVS2_MC_PATCH_PATH"; do
+  # AArch64 使用 NEON intrinsics 补丁组；x86_64 保留 AVX2 运动补偿补丁。
+  if [[ "$TARGET_ARCH" == "linux-arm64" ]]; then
+    DAVS2_PATCHES=("$DAVS2_PATCH_PATH" "$DAVS2_COMPAT_PATCH_PATH")
+    for davs2_arm_patch in "$REPO_ROOT"/patches/davs2-10bit/aarch64/*.patch; do
+      DAVS2_PATCHES+=("$davs2_arm_patch")
+    done
+    DAVS2_PATCHES+=("$DAVS2_COLOR_PATCH_PATH")
+  else
+    DAVS2_PATCHES=("$DAVS2_PATCH_PATH" "$DAVS2_COMPAT_PATCH_PATH" "$DAVS2_COLOR_PATCH_PATH" "$DAVS2_MC_PATCH_PATH")
+  fi
+  for davs2_patch_path in "${DAVS2_PATCHES[@]}"; do
     if [[ ! -f "$davs2_patch_path" ]]; then
       echo "Missing davs2 patch file: $davs2_patch_path" >&2
       exit 1
@@ -218,11 +260,13 @@ if [[ "$LICENSE_FLAVOR" == "gpl" ]]; then
   fi
 
   pushd "$DAVS2_CONFIGURE_DIR" >/dev/null
-  ./configure \
-    --prefix="$DAVS2_INSTALL_ROOT" \
-    --disable-cli \
-    --enable-pic \
-    --bit-depth=10
+  # 上游 fork 未附带 aarch64 汇编源文件；禁用汇编后 Makefile 跳过该分支，
+  # NEON 由 intrinsics 补丁经 ARCH_AARCH64 守卫提供（与 macOS arm64 一致）。
+  DAVS2_CONFIGURE_FLAGS=(--prefix="$DAVS2_INSTALL_ROOT" --disable-cli --enable-pic --bit-depth=10)
+  if [[ "$TARGET_ARCH" == "linux-arm64" ]]; then
+    DAVS2_CONFIGURE_FLAGS+=(--disable-asm)
+  fi
+  ./configure "${DAVS2_CONFIGURE_FLAGS[@]}"
   make -j"$CPU_COUNT"
   make install-lib-static
   popd >/dev/null
@@ -266,7 +310,7 @@ bash "$SCRIPT_DIR/embed_libass.sh" "$SOURCE_DIR" "$SUBTITLE_INSTALL_ROOT"
 PKG_CONFIG_BIN="$PKG_CONFIG_BIN" bash "$SCRIPT_DIR/build_disc_runtime.sh" linux "$LICENSE_FLAVOR" "$WORK_ROOT" "$CPU_COUNT"
 bash "$SCRIPT_DIR/embed_discs.sh" "$SOURCE_DIR" "$DISC_INSTALL_ROOT" "$LICENSE_FLAVOR"
 
-PKG_CONFIG_BIN="$PKG_CONFIG_BIN" bash "$SCRIPT_DIR/build_encoder_runtime.sh" linux "$LICENSE_FLAVOR" "$WORK_ROOT" "$CPU_COUNT"
+PKG_CONFIG_BIN="$PKG_CONFIG_BIN" bash "$SCRIPT_DIR/build_encoder_runtime.sh" linux "$LICENSE_FLAVOR" "$WORK_ROOT" "$CPU_COUNT" "$TARGET_ARCH"
 source "$ENCODER_INSTALL_ROOT/ffmpeg-options.sh"
 
 PKG_CONFIG_PATH_ENTRIES=("$ENCODER_INSTALL_ROOT/lib/pkgconfig" "$UAVS3D_INSTALL_ROOT/lib/pkgconfig" "$SUBTITLE_INSTALL_ROOT/lib/pkgconfig" "$DISC_INSTALL_ROOT/lib/pkgconfig")
@@ -285,7 +329,7 @@ pushd "$SOURCE_DIR" >/dev/null
 
 CONFIGURE_FLAGS=(
   --prefix="$INSTALL_ROOT"
-  --arch=x86_64
+  --arch="$([[ "$TARGET_ARCH" == "linux-arm64" ]] && echo aarch64 || echo x86_64)"
   --target-os=linux
   --cc=gcc
   --cxx=g++
@@ -371,6 +415,7 @@ is_system_so() {
 {
   echo "FFmpeg version: $FFMPEG_VERSION"
   echo "License flavor: $LICENSE_FLAVOR"
+  echo "Target architecture: $TARGET_ARCH"
   echo "Blu-ray dependencies (static): libbluray 1.5.0, libudfread 1.2.0"
   if [[ "$LICENSE_FLAVOR" == gpl ]]; then
     echo "DVD dependencies (static): libdvdread 7.1.1, libdvdnav 7.0.0, libdvdcss 1.6.0"
@@ -378,11 +423,17 @@ is_system_so() {
   echo "Enable libuavs3d: true"
   echo "libuavs3d linkage: static"
   echo "libuavs3d revision: $UAVS3D_GIT_REF"
+  if [[ "$TARGET_ARCH" == "linux-arm64" ]]; then
+    echo "libuavs3d SIMD: AArch64 NEON"
+  fi
   echo "Enable libdavs2: $ENABLE_LIBDAVS2"
   if [[ "$ENABLE_LIBDAVS2" == true ]]; then
     echo "libdavs2 linkage: static"
     echo "libdavs2 revision: $DAVS2_GIT_REF"
     echo "libdavs2 bit depth: 10"
+    if [[ "$TARGET_ARCH" == "linux-arm64" ]]; then
+      echo "libdavs2 SIMD: AArch64 NEON intrinsics (upstream asm disabled)"
+    fi
   fi
   cat "$SUBTITLE_INSTALL_ROOT/versions.txt"
   cat "$ENCODER_INSTALL_ROOT/versions.txt"

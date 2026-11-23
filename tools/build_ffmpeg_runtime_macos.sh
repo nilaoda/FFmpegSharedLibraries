@@ -1,15 +1,31 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Build a self-contained macOS arm64 FFmpeg runtime:
+# Build a self-contained macOS FFmpeg runtime (arm64 or x64):
 # - FFmpeg shared dylibs are packaged
 # - libuavs3d is built as a static dependency and linked into FFmpeg
 # - unexpected external dylib dependencies are treated as build failures
 # 软件编码器由公共依赖脚本构建，并通过显式白名单启用。
 
-FFMPEG_VERSION="${1:?usage: build_ffmpeg_runtime_macos.sh <ffmpeg-version> <gpl|lgpl> [work-root] }"
-LICENSE_FLAVOR="${2:?usage: build_ffmpeg_runtime_macos.sh <ffmpeg-version> <gpl|lgpl> [work-root] }"
+FFMPEG_VERSION="${1:?usage: build_ffmpeg_runtime_macos.sh <ffmpeg-version> <gpl|lgpl> [work-root] [osx-arm64|osx-x64] }"
+LICENSE_FLAVOR="${2:?usage: build_ffmpeg_runtime_macos.sh <ffmpeg-version> <gpl|lgpl> [work-root] [osx-arm64|osx-x64] }"
 WORK_ROOT="${3:-$PWD/.ffmpeg-runtime-build}"
+TARGET_ARCH="${4:-}"
+if [[ -z "$TARGET_ARCH" ]]; then
+  case "$(uname -m)" in
+    arm64) TARGET_ARCH=osx-arm64 ;;
+    x86_64) TARGET_ARCH=osx-x64 ;;
+    *) echo "Cannot detect a supported macOS architecture from '$(uname -m)'; pass osx-arm64 or osx-x64 explicitly" >&2; exit 1 ;;
+  esac
+fi
+case "$TARGET_ARCH" in
+  osx-arm64|osx-x64)
+    ;;
+  *)
+    echo "Unsupported macOS target architecture: $TARGET_ARCH" >&2
+    exit 1
+    ;;
+esac
 mkdir -p "$WORK_ROOT"
 WORK_ROOT="$(cd "$WORK_ROOT" && pwd)"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -84,7 +100,7 @@ LIBRARY_NAMES=(
   libavdevice.63.dylib
 )
 
-PACKAGE_NAME="ffmpeg-runtime-osx-arm64-$LICENSE_FLAVOR-shared-$FFMPEG_VERSION"
+PACKAGE_NAME="ffmpeg-runtime-$TARGET_ARCH-$LICENSE_FLAVOR-shared-$FFMPEG_VERSION"
 ARTIFACT_PATH="$ARTIFACT_ROOT/$PACKAGE_NAME.zip"
 
 mkdir -p "$SOURCE_ROOT" "$INSTALL_ROOT" "$RUNTIME_ROOT" "$ARTIFACT_ROOT"
@@ -126,6 +142,9 @@ git init "$UAVS3D_SOURCE_DIR" >/dev/null
 git -C "$UAVS3D_SOURCE_DIR" remote add origin "$UAVS3D_GIT_URL"
 git -C "$UAVS3D_SOURCE_DIR" fetch --depth 1 origin "$UAVS3D_GIT_REF"
 git -C "$UAVS3D_SOURCE_DIR" checkout --detach FETCH_HEAD
+# Windows COFF 汇编宏与 CMake ARM64 处理器大小写匹配；ELF/Mach-O 行为不变。
+patch -d "$UAVS3D_SOURCE_DIR" -p1 --batch --forward --fuzz=0 \
+  <"$REPO_ROOT/patches/uavs3d/0001-arm64-windows-coff-assembly-and-cmake-arch.patch"
 
 cmake -S "$UAVS3D_SOURCE_DIR" \
   -B "$UAVS3D_BUILD_DIR" \
@@ -172,11 +191,14 @@ if [[ "$LICENSE_FLAVOR" == "gpl" ]]; then
   git -C "$DAVS2_SOURCE_DIR" fetch --depth 1 origin "$DAVS2_GIT_REF"
   git -C "$DAVS2_SOURCE_DIR" checkout --detach FETCH_HEAD
 
-  # Apple Silicon NEON primitives; other targets retain their existing patch set.
+  # Apple Silicon NEON primitives; Intel x64 retains the x86 patch set without
+  # NEON patches or Apple M1 compiler flags.
   DAVS2_PATCHES=("$DAVS2_PATCH_PATH" "$DAVS2_COMPAT_PATCH_PATH")
-  for davs2_arm_patch in "$REPO_ROOT"/patches/davs2-10bit/aarch64/*.patch; do
-    DAVS2_PATCHES+=("$davs2_arm_patch")
-  done
+  if [[ "$TARGET_ARCH" == "osx-arm64" ]]; then
+    for davs2_arm_patch in "$REPO_ROOT"/patches/davs2-10bit/aarch64/*.patch; do
+      DAVS2_PATCHES+=("$davs2_arm_patch")
+    done
+  fi
   DAVS2_PATCHES+=("$DAVS2_COLOR_PATCH_PATH")
   for davs2_patch_path in "${DAVS2_PATCHES[@]}"; do
     if [[ ! -f "$davs2_patch_path" ]]; then
@@ -209,13 +231,21 @@ if [[ "$LICENSE_FLAVOR" == "gpl" ]]; then
   fi
 
   pushd "$DAVS2_CONFIGURE_DIR" >/dev/null
+  # 上游 configure 在 Darwin 分支强制 asm="no"；x64 与 arm64 同样走 C 实现，
+  # arm64 的 NEON 来自 intrinsics 补丁。Intel 构建不附加 NEON/M1 参数。
+  DAVS2_HOST="x86_64-apple-darwin"
+  DAVS2_EXTRA_CFLAGS=""
+  if [[ "$TARGET_ARCH" == "osx-arm64" ]]; then
+    DAVS2_HOST="aarch64-apple-darwin"
+    DAVS2_EXTRA_CFLAGS="-mcpu=apple-m1 -fvectorize -fslp-vectorize"
+  fi
   if ! CC=clang CXX=clang++ ./configure \
-    --host=aarch64-apple-darwin \
+    --host="$DAVS2_HOST" \
     --prefix="$DAVS2_INSTALL_ROOT" \
     --disable-cli \
     --enable-pic \
     --bit-depth=10 \
-    --extra-cflags="-mcpu=apple-m1 -fvectorize -fslp-vectorize"; then
+    --extra-cflags="$DAVS2_EXTRA_CFLAGS"; then
     if [[ -f config.log ]]; then
       echo "===== davs2 config.log (tail 400) =====" >&2
       tail -n 400 config.log >&2
@@ -265,7 +295,7 @@ bash "$SCRIPT_DIR/embed_libass.sh" "$SOURCE_DIR" "$SUBTITLE_INSTALL_ROOT"
 PKG_CONFIG_BIN="$PKG_CONFIG_BIN" bash "$SCRIPT_DIR/build_disc_runtime.sh" macos "$LICENSE_FLAVOR" "$WORK_ROOT" "$CPU_COUNT"
 bash "$SCRIPT_DIR/embed_discs.sh" "$SOURCE_DIR" "$DISC_INSTALL_ROOT" "$LICENSE_FLAVOR"
 
-PKG_CONFIG_BIN="$PKG_CONFIG_BIN" bash "$SCRIPT_DIR/build_encoder_runtime.sh" macos "$LICENSE_FLAVOR" "$WORK_ROOT" "$CPU_COUNT"
+PKG_CONFIG_BIN="$PKG_CONFIG_BIN" bash "$SCRIPT_DIR/build_encoder_runtime.sh" macos "$LICENSE_FLAVOR" "$WORK_ROOT" "$CPU_COUNT" "$TARGET_ARCH"
 source "$ENCODER_INSTALL_ROOT/ffmpeg-options.sh"
 
 PKG_CONFIG_PATH_ENTRIES=("$ENCODER_INSTALL_ROOT/lib/pkgconfig" "$UAVS3D_INSTALL_ROOT/lib/pkgconfig" "$SUBTITLE_INSTALL_ROOT/lib/pkgconfig" "$DISC_INSTALL_ROOT/lib/pkgconfig")
@@ -284,7 +314,7 @@ pushd "$SOURCE_DIR" >/dev/null
 
 CONFIGURE_FLAGS=(
   --prefix="$INSTALL_ROOT"
-  --arch=arm64
+  --arch="$([[ "$TARGET_ARCH" == "osx-arm64" ]] && echo arm64 || echo x86_64)"
   --target-os=darwin
   --cc=clang
   --pkg-config="$PKG_CONFIG_BIN"
@@ -308,8 +338,10 @@ CONFIGURE_FLAGS=(
   --disable-devices
   --enable-videotoolbox
   --enable-audiotoolbox
-  --enable-neon
 )
+if [[ "$TARGET_ARCH" == "osx-arm64" ]]; then
+  CONFIGURE_FLAGS+=(--enable-neon)
+fi
 
 if [[ "$LICENSE_FLAVOR" == "gpl" ]]; then
   CONFIGURE_FLAGS+=(--enable-gpl --enable-version3 --enable-libdvdread --enable-libdvdnav)
@@ -370,6 +402,7 @@ done
 {
   echo "FFmpeg version: $FFMPEG_VERSION"
   echo "License flavor: $LICENSE_FLAVOR"
+  echo "Target architecture: $TARGET_ARCH"
   echo "Blu-ray dependencies (static): libbluray 1.5.0, libudfread 1.2.0"
   if [[ "$LICENSE_FLAVOR" == gpl ]]; then
     echo "DVD dependencies (static): libdvdread 7.1.1, libdvdnav 7.0.0, libdvdcss 1.6.0"
@@ -377,12 +410,19 @@ done
   echo "Enable libuavs3d: true"
   echo "libuavs3d linkage: static"
   echo "libuavs3d revision: $UAVS3D_GIT_REF"
+  if [[ "$TARGET_ARCH" == "osx-arm64" ]]; then
+    echo "libuavs3d SIMD: AArch64 NEON"
+  fi
   echo "Enable libdavs2: $ENABLE_LIBDAVS2"
   if [[ "$ENABLE_LIBDAVS2" == true ]]; then
     echo "libdavs2 linkage: static"
     echo "libdavs2 revision: $DAVS2_GIT_REF"
     echo "libdavs2 bit depth: 10"
-    echo "libdavs2 SIMD: AArch64 NEON (Apple M1 baseline)"
+    if [[ "$TARGET_ARCH" == "osx-arm64" ]]; then
+      echo "libdavs2 SIMD: AArch64 NEON (Apple M1 baseline)"
+    else
+      echo "libdavs2 SIMD: none (upstream configure disables assembly on Darwin)"
+    fi
     echo "libdavs2 reference management: upstream DPB lifetime rules"
   fi
   cat "$SUBTITLE_INSTALL_ROOT/versions.txt"

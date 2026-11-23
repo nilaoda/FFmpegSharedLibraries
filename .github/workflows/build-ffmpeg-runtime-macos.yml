@@ -1,4 +1,4 @@
-name: FFmpeg Runtime macOS arm64 (9.0.2 GPL)
+name: FFmpeg Runtime macOS arm64/x64 (9.0.2 GPL)
 
 on:
   workflow_dispatch:
@@ -10,9 +10,17 @@ env:
   MACOSX_DEPLOYMENT_TARGET: "14.0"
 
 jobs:
-  build-osx-arm64-runtime:
-    name: Build FFmpeg Runtime [osx-arm64]
-    runs-on: macos-15
+  build-osx-runtime:
+    name: Build FFmpeg Runtime [${{ matrix.arch }}]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: osx-arm64
+            runner: macos-15
+          - arch: osx-x64
+            runner: macos-15-intel
+    runs-on: ${{ matrix.runner }}
 
     steps:
       - uses: actions/checkout@v4
@@ -27,14 +35,33 @@ jobs:
           tools/build_ffmpeg_runtime_macos.sh \
             "$FFMPEG_VERSION" \
             "$LICENSE_FLAVOR" \
-            "$RUNNER_TEMP/$WORK_ROOT_DIR"
+            "$RUNNER_TEMP/$WORK_ROOT_DIR" \
+            "${{ matrix.arch }}"
 
       - name: Verify shared ZIP
         run: |
           ROOT="$RUNNER_TEMP/$WORK_ROOT_DIR"
           set -euo pipefail
           PACKAGE="$(mktemp -d "$ROOT/shared-verify.XXXXXX")"
-          unzip -q "$ROOT/artifacts/ffmpeg-runtime-osx-arm64-$LICENSE_FLAVOR-shared-$FFMPEG_VERSION.zip" -d "$PACKAGE"
+          unzip -q "$ROOT/artifacts/ffmpeg-runtime-${{ matrix.arch }}-$LICENSE_FLAVOR-shared-$FFMPEG_VERSION.zip" -d "$PACKAGE"
+          expected_arch="x86_64"
+          if [ "${{ matrix.arch }}" = "osx-arm64" ]; then expected_arch="arm64"; fi
+          for dylib in "$PACKAGE"/*.dylib; do
+            actual_arch="$(lipo -archs "$dylib")"
+            if [ "$actual_arch" != "$expected_arch" ]; then
+              echo "Unexpected Mach-O architecture in $dylib: $actual_arch" >&2
+              exit 1
+            fi
+          done
+          deployment="$(otool -l "$PACKAGE/libavutil.61.dylib" | awk '
+            /LC_VERSION_MIN_MACOSX|LC_BUILD_VERSION/ { insec = 1 }
+            got == "" && insec && $1 == "version" { got = $2 }
+            got == "" && insec && $1 == "minos" { got = $2 }
+            END { print got }')"
+          if [ "$deployment" != "14.0" ]; then
+            echo "Unexpected macOS deployment target: ${deployment:-none}" >&2
+            exit 1
+          fi
           clang -O2 -Wall -Wextra -I"$ROOT/install/include" -I"$ROOT/subtitle-install/include" -I"$ROOT/disc-install/include" tools/verify_runtime.c \
             "$PACKAGE/libavformat.63.dylib" \
             "$PACKAGE/libavcodec.63.dylib" \
@@ -49,8 +76,8 @@ jobs:
       - name: Upload shared artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ffmpeg-runtime-osx-arm64-${{ env.LICENSE_FLAVOR }}-shared-${{ env.FFMPEG_VERSION }}
-          path: ${{ runner.temp }}/ffmpeg-runtime-build/artifacts/ffmpeg-runtime-osx-arm64-${{ env.LICENSE_FLAVOR }}-shared-${{ env.FFMPEG_VERSION }}.zip
+          name: ffmpeg-runtime-${{ matrix.arch }}-${{ env.LICENSE_FLAVOR }}-shared-${{ env.FFMPEG_VERSION }}
+          path: ${{ runner.temp }}/ffmpeg-runtime-build/artifacts/ffmpeg-runtime-${{ matrix.arch }}-${{ env.LICENSE_FLAVOR }}-shared-${{ env.FFMPEG_VERSION }}.zip
           if-no-files-found: error
           retention-days: 14
 
@@ -59,13 +86,13 @@ jobs:
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: |
           ROOT="$RUNNER_TEMP/$WORK_ROOT_DIR"
-          bash tools/verify_ffmpeg_static.sh macos "$ROOT/artifacts/ffmpeg-runtime-osx-arm64-$LICENSE_FLAVOR-static-$FFMPEG_VERSION.zip"
+          bash tools/verify_ffmpeg_static.sh macos "$ROOT/artifacts/ffmpeg-runtime-${{ matrix.arch }}-$LICENSE_FLAVOR-static-$FFMPEG_VERSION.zip"
 
       - name: Upload static artifact
         if: ${{ !cancelled() && steps.verify-static.outcome == 'success' }}
         uses: actions/upload-artifact@v4
         with:
-          name: ffmpeg-runtime-osx-arm64-${{ env.LICENSE_FLAVOR }}-static-${{ env.FFMPEG_VERSION }}
-          path: ${{ runner.temp }}/ffmpeg-runtime-build/artifacts/ffmpeg-runtime-osx-arm64-${{ env.LICENSE_FLAVOR }}-static-${{ env.FFMPEG_VERSION }}.zip
+          name: ffmpeg-runtime-${{ matrix.arch }}-${{ env.LICENSE_FLAVOR }}-static-${{ env.FFMPEG_VERSION }}
+          path: ${{ runner.temp }}/ffmpeg-runtime-build/artifacts/ffmpeg-runtime-${{ matrix.arch }}-${{ env.LICENSE_FLAVOR }}-static-${{ env.FFMPEG_VERSION }}.zip
           if-no-files-found: error
           retention-days: 14

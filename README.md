@@ -4,18 +4,21 @@ GitHub Actions workflows for building FFmpeg shared-library runtimes with softwa
 
 ## Outputs
 
-- `macos-15`: arm64 `.dylib`
+- `macos-15`: osx-arm64 `.dylib`
+- `macos-15-intel`: osx-x64 `.dylib`
 - `windows-latest`: win64 `.dll`
-- `ubuntu-24.04`: Linux x64 `.so` (glibc 2.39 baseline)
+- `windows-11-arm`: win-arm64 `.dll` (MSYS2 CLANGARM64/LLVM)
+- `ubuntu-24.04`: linux-x64 `.so` (glibc 2.39 baseline)
+- `ubuntu-24.04-arm`: linux-arm64 `.so` (glibc 2.39 baseline)
 
 Each runtime contains seven FFmpeg shared libraries. libass is linked statically into libavfilter, which also exports its public API; no separate libass runtime file is needed.
 
-- `libuavs3d` is always built from source as a static dependency and linked into FFmpeg.
-- `libdavs2` (`davs2-10bit`) is built from source and linked statically when `license_flavor=gpl`.
+- `libuavs3d` is always built from source as a static dependency and linked into FFmpeg. AArch64 builds use its NEON assembly and dispatch (`patches/uavs3d/0001-arm64-windows-coff-assembly-and-cmake-arch.patch` keeps the shared `function` macro assembling for Windows COFF and lets CMake match the `ARM64` processor value reported on Windows-on-ARM runners; ELF and Mach-O behavior is unchanged).
+- `libdavs2` (`davs2-10bit`) is built from source and linked statically when `license_flavor=gpl`. On AArch64 the NEON primitives come from the intrinsics patches; the upstream hand-written assembly stays disabled (upstream `configure` already forces `asm="no"` on Darwin, and the fork ships no `source/common/aarch64` assembly sources, so Linux/Windows arm64 builds pass `--disable-asm`). On macOS Intel, upstream's Darwin branch disables assembly too, so 10-bit decoding runs on the portable C path there.
 - Runtime artifacts do not include separate `libuavs3d`/`libdavs2` dynamic libraries.
 - libass, FreeType, HarfBuzz, FriBidi and libunibreak are linked statically into libavfilter. Linux also statically includes Fontconfig and Expat. These dependencies do not add separate runtime libraries.
-- The macOS runtime enables VideoToolbox hardware decoding and targets macOS 14.0 or later, independently of the runner version.
-- The Windows runtime enables D3D11VA and DXVA2 hardware decoding through Windows system APIs without additional runtime DLLs.
+- The macOS runtimes enable VideoToolbox hardware decoding and target macOS 14.0 or later, independently of the runner version; the Intel build applies no NEON patches and no `-mcpu=apple-m1` flags.
+- The Windows runtimes enable D3D11VA and DXVA2 hardware decoding through Windows system APIs without additional runtime DLLs. win64 builds with MSYS2 MinGW64 GCC; win-arm64 builds natively with MSYS2 CLANGARM64 LLVM/Clang (`--arch=aarch64`, LLVM binutils).
 
 The build downloads third-party sources into the workflow temp work root (`$RUNNER_TEMP/ffmpeg-runtime-build` in GitHub Actions) and applies a small set of local patches across both `davs2-10bit` and FFmpeg:
 
@@ -32,10 +35,15 @@ The build downloads third-party sources into the workflow temp work root (`$RUNN
   - adds AVX2 luma and chroma interpolation kernels for 10-bit AVS2 and selects them through the existing runtime CPUID dispatch,
   - preserves the existing scalar motion-compensation fallback for CPUs without AVX2.
 - `patches/davs2-10bit/aarch64/*.patch`
-  - enables AArch64 NEON detection, pixel operations, motion compensation, deblocking and intra prediction for macOS arm64 builds,
-  - preserves compiler vectorization and targets the Apple M1 baseline rather than the build machine's CPU.
+  - enables AArch64 NEON detection, pixel operations, motion compensation, deblocking and intra prediction for macOS arm64, Linux arm64 and Windows arm64 builds,
+  - preserves compiler vectorization and targets the Apple M1 baseline rather than the build machine's CPU on macOS; Linux and Windows arm64 builds use the generic NEON settings.
 
-The x86 optimisation patch is applied by the Linux and Windows x86_64 build scripts; macOS arm64 builds do not apply it.
+The x86 optimisation patch is applied by the Linux and Windows x86_64 build scripts; macOS builds (arm64 and Intel) do not apply it.
+
+- [`patches/uavs3d/0001-arm64-windows-coff-assembly-and-cmake-arch.patch`](./patches/uavs3d/0001-arm64-windows-coff-assembly-and-cmake-arch.patch)
+  - keeps uavs3d's shared `function` assembly macro ELF-only for its `.type` directive and adds a Windows COFF branch without it, so the ten ARM64 NEON assembly units assemble for PE/COFF with clang while ELF and Mach-O output is unchanged,
+  - makes uavs3d's CMake `CMAKE_SYSTEM_PROCESSOR` check accept the uppercase `ARM64` value reported on Windows-on-ARM, keeping the NEON dispatch on win-arm64 builds instead of silently falling back to the generic C path,
+  - applied by all three platform scripts on the pinned `libuavs3d` revision.
 
 Reference pictures follow the upstream DPB lifetime rules. A zero `i_ref_count` only
 means no active worker holds the picture; `b_refered_by_others` can still reserve it
@@ -144,7 +152,8 @@ four jobs to limit peak compiler memory; set `BUILD_JOBS` to override it.
 require FFmpeg 9 bindings; applications using FFmpeg 7 bindings must migrate
 before adopting this runtime.
 macOS packaging rewrites dependencies to `@loader_path` and renews the ad-hoc
-signature after rewriting, so ARM64 libraries can load from the flat package.
+signature after rewriting, so the libraries can load from the flat package on
+both Apple Silicon and Intel.
 
 ## Subtitle Preview Support
 
@@ -179,8 +188,9 @@ contains the seven FFmpeg archives, their third-party static dependencies,
 public FFmpeg/libass/disc headers, a build manifest and a relocatable
 `ffmpeg-static` pkg-config module.
 
-Use GCC on Linux, Clang on macOS, or the MSYS2 MinGW-w64 GCC toolchain on
-Windows. For example, from the extracted static package directory:
+Use GCC on Linux (x64 or arm64), Clang on macOS (arm64 or Intel), or the matching
+MSYS2 toolchain on Windows (`MINGW64` GCC for win64, `CLANGARM64` LLVM/Clang for
+win-arm64). For example, from the extracted static package directory:
 
 ```sh
 export PKG_CONFIG_LIBDIR=lib/pkgconfig
@@ -188,9 +198,9 @@ export PKG_CONFIG_PATH=
 cc player.c $(pkg-config --static --cflags --libs ffmpeg-static) -o player
 ```
 
-On Windows, use `gcc` and `pkgconf` for this command. On macOS, use
-`clang` and target macOS 14.0 or later. The static package still uses
-platform system libraries and frameworks.
+On Windows, use `gcc`/`clang` and `pkgconf` for this command, matching the
+target's toolchain. On macOS, use `clang` and target macOS 14.0 or later. The
+static package still uses platform system libraries and frameworks.
 
 Linux and macOS build both library types from a single FFmpeg configuration.
 Windows builds FFmpeg twice with shared and static configurations and reuses
@@ -233,8 +243,12 @@ HEVC 10/12-bit and VP9/AV1 10-bit. H.264 and MPEG-2 also round-trip synthetic
 bottom-field-first order, checking that decoded frames retain their scan type and field order.
 No external samples or audio output device are needed.
 
-The Windows build first checks static C++/pthread linkage with both GCC drivers
-using `tools/verify_windows_linkage.cpp`, including a thread and an exception.
+The Windows builds first check static C++/pthread linkage with both toolchain
+drivers using `tools/verify_windows_linkage.cpp`, including a thread and an
+exception. The win-arm64 job additionally runs `tools/probe_windows_toolchain.sh`
+before the full build to confirm the compiler target, the produced PE machine
+type (ARM64) and native execution, and rejects any NEON assembly that touches
+the platform-reserved `x18`/`w18` registers.
 The complete static library group is passed as one linker argument so FFmpeg
 9's C++ driver selection cannot reorder the runtime libraries. Windows pkg-config
 link flags explicitly select the static winpthread archive, preventing encoder
@@ -310,6 +324,6 @@ GPL builds statically embed libbluray 1.5.0, libudfread 1.2.0, libdvdread 7.1.1,
 
 `tools/build_disc_runtime.sh` downloads pinned, SHA-256 checked sources and builds PIC static archives with Meson. `tools/embed_discs.sh` adds the archive objects and the required public exports to avformat. The GUI can resolve its libbluray/libdvdread calls from avformat, just as libass APIs are exposed by avfilter. DVD CSS support is linked directly through libdvdcss rather than relying on a system plugin. No libaacs or libbdplus is bundled; protected Blu-ray input remains unsupported. BD-J, menus, font rendering and XML metadata dependencies are disabled.
 
-The three GPL CI jobs compile `verify_discs.h` through `verify_runtime.c` against the packaged libraries, checking all APIs used by the GUI, DVD input and VOB/PGS subtitle decoders. Existing platform dependency checks reject unexpected dynamic dependencies.
+The six GPL CI jobs compile `verify_discs.h` through `verify_runtime.c` against the packaged libraries, checking all APIs used by the GUI, DVD input and VOB/PGS subtitle decoders. Existing platform dependency checks reject unexpected dynamic dependencies.
 
 Static linking does not remove upstream licensing requirements. libbluray/libudfread use LGPL-2.1-or-later; libdvdread/libdvdnav/libdvdcss use GPL-2.0-or-later. Versions and build sources above form part of the runtime source distribution.
