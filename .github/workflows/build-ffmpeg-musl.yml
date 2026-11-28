@@ -1,0 +1,109 @@
+name: FFmpeg Runtime Linux musl x64/arm64 (9.0.2 GPL)
+run-name: ${{ github.workflow }}
+
+on:
+  workflow_dispatch:
+
+env:
+  FFMPEG_VERSION: "9.0.2"
+  LICENSE_FLAVOR: "gpl"
+  WORK_ROOT_DIR: ffmpeg-musl-sdk-build
+  MUSL_IMAGE: ffmpeg-musl-sdk:alpine-3.22.2
+
+jobs:
+  build-linux-musl-static-sdk:
+    name: Build static SDK [${{ matrix.target }}]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: linux-musl-x64
+            runner: ubuntu-24.04
+            container_platform: linux/amd64
+          - target: linux-musl-arm64
+            runner: ubuntu-24.04-arm
+            container_platform: linux/arm64
+    runs-on: ${{ matrix.runner }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Alpine 3.22.2 toolchain image
+        run: docker build --platform "${{ matrix.container_platform }}" -f tools/Dockerfile.musl-sdk -t "$MUSL_IMAGE" .
+
+      - name: Build FFmpeg shared runtime and static SDK
+        run: |
+          ROOT="$RUNNER_TEMP/$WORK_ROOT_DIR"
+          mkdir -p "$ROOT"
+          docker run --rm --platform "${{ matrix.container_platform }}" \
+            -v "$GITHUB_WORKSPACE:/src" -v "$ROOT:/work" -w /src "$MUSL_IMAGE" \
+            bash tools/build_ffmpeg_musl.sh \
+              "$FFMPEG_VERSION" "$LICENSE_FLAVOR" /work/build "${{ matrix.target }}"
+
+      - name: Verify unpacked SDK in musl and save static verifier
+        run: |
+          ROOT="$RUNNER_TEMP/$WORK_ROOT_DIR"
+          PACKAGE="/work/build/artifacts/ffmpeg-runtime-${{ matrix.target }}-$LICENSE_FLAVOR-static-$FFMPEG_VERSION.zip"
+          docker run --rm --platform "${{ matrix.container_platform }}" \
+            -v "$GITHUB_WORKSPACE:/src" -v "$ROOT:/work" -w /src "$MUSL_IMAGE" \
+            bash tools/verify_ffmpeg_static.sh linux-musl "$PACKAGE" \
+              "${{ matrix.target }}" /work/verify/verify_runtime
+
+      - name: Verify unpacked shared runtime in musl
+        run: |
+          ROOT="$RUNNER_TEMP/$WORK_ROOT_DIR"
+          PACKAGE="/work/build/artifacts/ffmpeg-runtime-${{ matrix.target }}-$LICENSE_FLAVOR-shared-$FFMPEG_VERSION.zip"
+          docker run --rm --platform "${{ matrix.container_platform }}" \
+            -v "$GITHUB_WORKSPACE:/src" -v "$ROOT:/work" -w /src "$MUSL_IMAGE" \
+            bash tools/verify_ffmpeg_shared_musl.sh "${{ matrix.target }}" "$PACKAGE" /work/build
+
+      - name: Run x64 static verifier on glibc Linux host
+        if: ${{ matrix.target == 'linux-musl-x64' }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y fontconfig fonts-dejavu-core
+          EXECUTABLE="$RUNNER_TEMP/$WORK_ROOT_DIR/verify/verify_runtime"
+          if readelf -l "$EXECUTABLE" | grep -q 'INTERP'; then
+            echo "Unexpected PT_INTERP in x64 static verifier" >&2
+            exit 1
+          fi
+          if readelf -d "$EXECUTABLE" 2>/dev/null | grep -q '(NEEDED)'; then
+            echo "Unexpected DT_NEEDED in x64 static verifier" >&2
+            exit 1
+          fi
+          "$EXECUTABLE"
+
+      - name: Run ARM64 static verifier on matching Linux host
+        if: ${{ matrix.target == 'linux-musl-arm64' }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y fontconfig fonts-dejavu-core
+          EXECUTABLE="$RUNNER_TEMP/$WORK_ROOT_DIR/verify/verify_runtime"
+          if readelf -l "$EXECUTABLE" | grep -q 'INTERP'; then
+            echo "Unexpected PT_INTERP in ARM64 static verifier" >&2
+            exit 1
+          fi
+          if readelf -d "$EXECUTABLE" 2>/dev/null | grep -q '(NEEDED)'; then
+            echo "Unexpected DT_NEEDED in ARM64 static verifier" >&2
+            exit 1
+          fi
+          "$EXECUTABLE"
+
+      - name: Record native execution mode
+        run: echo "${{ matrix.target }} SDK and verifier ran natively on ${{ matrix.runner }} using ${{ matrix.container_platform }}." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload static SDK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ffmpeg-runtime-${{ matrix.target }}-${{ env.LICENSE_FLAVOR }}-static-${{ env.FFMPEG_VERSION }}
+          path: ${{ runner.temp }}/ffmpeg-musl-sdk-build/build/artifacts/ffmpeg-runtime-${{ matrix.target }}-${{ env.LICENSE_FLAVOR }}-static-${{ env.FFMPEG_VERSION }}.zip
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload shared runtime artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ffmpeg-runtime-${{ matrix.target }}-${{ env.LICENSE_FLAVOR }}-shared-${{ env.FFMPEG_VERSION }}
+          path: ${{ runner.temp }}/ffmpeg-musl-sdk-build/build/artifacts/ffmpeg-runtime-${{ matrix.target }}-${{ env.LICENSE_FLAVOR }}-shared-${{ env.FFMPEG_VERSION }}.zip
+          if-no-files-found: error
+          retention-days: 14

@@ -1,0 +1,34 @@
+FROM alpine:3.22.2
+
+RUN apk add --no-cache \
+    bash \
+    build-base \
+    cmake \
+    coreutils \
+    diffutils \
+    curl \
+    fontconfig \
+    gperf \
+    git \
+    linux-headers \
+    make \
+    nasm \
+    ninja \
+    patch \
+    patchelf \
+    perl \
+    pkgconf \
+    py3-pip \
+    python3 \
+    strace \
+    tar \
+    ttf-dejavu \
+    unzip \
+    xz \
+    zip \
+ && python3 -m venv /opt/musl-build-tools \
+ && /opt/musl-build-tools/bin/pip install --no-cache-dir meson==1.12.1 \
+ && fc-cache -f
+
+ENV PATH="/opt/musl-build-tools/bin:${PATH}"
+WORKDIR /src

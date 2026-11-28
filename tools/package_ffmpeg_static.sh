@@ -13,6 +13,9 @@ case "$platform:$target" in
   windows:|windows:win64|windows:win-arm64)
     [[ -n "$target" ]] && target_arch="$target" || target_arch=win64
     ;;
+  linux-musl:linux-musl-x64|linux-musl:linux-musl-arm64)
+    target_arch="$target"
+    ;;
   linux:|macos:)
     target_arch=""
     ;;
@@ -54,6 +57,7 @@ for root in "${dependency_roots[@]}"; do
 done
 
 link_flags=()
+package_cflags='-I${includedir}'
 for component in "${components[@]}"; do
   link_flags+=("-l$component")
 done
@@ -74,8 +78,14 @@ if [[ "$platform" == windows ]]; then
     bash "$script_dir/pkg_config_windows_static.sh" --normalize-link-flags)"
 fi
 read -r -a extra_flags <<< "${extra_libraries//$'\n'/ }"
+# Musl static driver options below select these runtimes from GCC archives.
 for flag in "${extra_flags[@]}"; do
   case "$platform:$flag" in
+    linux-musl:-lgcc_s|linux-musl:-lgcc|linux-musl:-lgcc_eh)
+      ;;
+    linux-musl:-lstdc++)
+      link_flags+=(-Wl,-Bstatic -lstdc++)
+      ;;
     *:-L*) ;;
     windows:*/libgdi32.a)
       link_flags+=(-lgdi32)
@@ -112,6 +122,9 @@ if [[ "$platform" == windows ]]; then
   fi
 elif [[ "$platform" == linux ]]; then
   link_flags+=(-static-libgcc)
+elif [[ "$platform" == linux-musl ]]; then
+  package_cflags+=' -fPIE'
+  link_flags+=(-static-libgcc -static-libstdc++ -static-pie)
 fi
 
 cat > "$stage/lib/pkgconfig/ffmpeg-static.pc" <<EOF
@@ -123,18 +136,27 @@ Name: ffmpeg-static
 Description: FFmpeg static libraries and link dependencies
 Version: $version
 Libs: -L\${libdir} ${link_flags[*]}
-Cflags: -I\${includedir}
+Cflags: ${package_cflags}
 EOF
 
 {
   echo "FFmpeg version: $version"
   echo "Target: $platform"
-  if [[ "$platform" == windows && "$target_arch" == win-arm64 ]]; then
-    echo "Target architecture: win-arm64"
+  if [[ "$platform" == linux-musl || "$platform:$target_arch" == windows:win-arm64 ]]; then
+    echo "Target architecture: $target_arch"
   fi
   echo "License flavor: $license_flavor"
-  sed -n 's/^FFMPEG_CONFIGURATION=/Configure flags: /p' "$config_mak"
+  if [[ "$platform" == linux-musl ]]; then
+    sed -n 's/^FFMPEG_CONFIGURATION=/Configure flags: /p' "$config_mak" |
+      sed -e "s|$install_root|<install-root>|g" -e "s|$work_root|<work-root>|g"
+  else
+    sed -n 's/^FFMPEG_CONFIGURATION=/Configure flags: /p' "$config_mak"
+  fi
   cat "$work_root/encoder-install/versions.txt" "$work_root/subtitle-install/versions.txt"
+  if [[ "$platform" == linux-musl ]]; then
+    cat "$work_root/musl-toolchain-manifest.txt"
+    echo "Static consumer link flags: ${link_flags[*]}"
+  fi
   echo "Bundled static archives:"
   printf '  %s\n' "$stage"/lib/*.a | sed "s|$stage/||"
 } > "$stage/manifest.txt"

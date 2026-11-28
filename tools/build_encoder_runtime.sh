@@ -14,6 +14,11 @@ if [[ ! "$ENCODER_JOBS" =~ ^[1-9][0-9]*$ ]]; then
   exit 1
 fi
 ENCODER_ARCH="${5:-}"
+ENCODER_MUSL_PROFILE="${ENCODER_MUSL_PROFILE:-false}"
+if [[ "$ENCODER_MUSL_PROFILE" != true && "$ENCODER_MUSL_PROFILE" != false ]]; then
+  echo "Unsupported encoder build profile" >&2
+  exit 1
+fi
 if [[ -z "$ENCODER_ARCH" ]]; then
   case "$ENCODER_PLATFORM,$(uname -m)" in
     macos,arm64) ENCODER_ARCH=osx-arm64 ;;
@@ -120,8 +125,12 @@ popd >/dev/null
 
 encoder_source libaom-3.15.3.tar.gz https://storage.googleapis.com/aom-releases/libaom-3.15.3.tar.gz \
   12c01dc731ed7b5a999e28120b45bf58a002ba3435a4ba2cfbc1e084a27c9c04 libaom-3.15.3
-encoder_cmake "$ENCODER_SOURCE/libaom-3.15.3" aom -DENABLE_TESTS=OFF -DENABLE_EXAMPLES=OFF \
-  -DENABLE_TOOLS=OFF -DENABLE_DOCS=OFF -DCONFIG_PIC=1 -DCONFIG_RUNTIME_CPU_DETECT=1 -DCONFIG_AV1_HIGHBITDEPTH=1
+LIBAOM_CMAKE_FLAGS=(-DENABLE_TESTS=OFF -DENABLE_EXAMPLES=OFF -DENABLE_TOOLS=OFF \
+  -DENABLE_DOCS=OFF -DCONFIG_PIC=1 -DCONFIG_RUNTIME_CPU_DETECT=1 -DCONFIG_AV1_HIGHBITDEPTH=1)
+if [[ "$ENCODER_MUSL_PROFILE" == true ]]; then
+  LIBAOM_CMAKE_FLAGS+=(-DENABLE_APPS=OFF)
+fi
+encoder_cmake "$ENCODER_SOURCE/libaom-3.15.3" aom "${LIBAOM_CMAKE_FLAGS[@]}"
 
 SOFTWARE_ENCODERS="mjpeg,bmp,tiff,gif,ass,movtext,subrip,webvtt,dvbsub,dvdsub"
 SOFTWARE_ENCODERS+=",mpeg1video,mpeg2video,mpeg4,ffv1,huffyuv,ffvhuff,utvideo,prores_ks,dnxhd,rawvideo"

@@ -1,6 +1,6 @@
 # FFmpegSharedLibraries
 
-GitHub Actions workflows for building FFmpeg shared-library runtimes with software encoding, subtitle decoding and libass rendering, `libuavs3d` enabled, and `libdavs2` (from `davs2-10bit`) enabled in GPL builds.
+GitHub Actions workflows for building FFmpeg shared-library runtimes and static development SDKs, with software encoding, subtitle decoding and libass rendering, `libuavs3d` enabled, and `libdavs2` (from `davs2-10bit`) enabled in GPL builds.
 
 ## Outputs
 
@@ -10,6 +10,7 @@ GitHub Actions workflows for building FFmpeg shared-library runtimes with softwa
 - `windows-11-arm`: win-arm64 `.dll` (MSYS2 CLANGARM64/LLVM)
 - `ubuntu-24.04`: linux-x64 `.so` (glibc 2.39 baseline)
 - `ubuntu-24.04-arm`: linux-arm64 `.so` (glibc 2.39 baseline)
+- Alpine 3.22.2 x64/arm64: `linux-musl-x64` and `linux-musl-arm64` shared runtimes plus static development SDKs
 
 Each runtime contains seven FFmpeg shared libraries. libass is linked statically into libavfilter, which also exports its public API; no separate libass runtime file is needed.
 
@@ -188,9 +189,11 @@ contains the seven FFmpeg archives, their third-party static dependencies,
 public FFmpeg/libass/disc headers, a build manifest and a relocatable
 `ffmpeg-static` pkg-config module.
 
-Use GCC on Linux (x64 or arm64), Clang on macOS (arm64 or Intel), or the matching
-MSYS2 toolchain on Windows (`MINGW64` GCC for win64, `CLANGARM64` LLVM/Clang for
-win-arm64). For example, from the extracted static package directory:
+Use GCC on the existing glibc Linux packages (x64 or arm64), Clang on macOS
+(arm64 or Intel), or the matching MSYS2 toolchain on Windows (`MINGW64` GCC for
+win64, `CLANGARM64` LLVM/Clang for win-arm64). The `linux-musl-x64` and
+`linux-musl-arm64` packages below use Alpine's matching musl GCC toolchain.
+For example, from an extracted static package directory:
 
 ```sh
 export PKG_CONFIG_LIBDIR=lib/pkgconfig
@@ -207,6 +210,18 @@ Windows builds FFmpeg twice with shared and static configurations and reuses
 the same third-party archives. Each ZIP is extracted into its own directory
 for verification before its upload. Linux CI checks the shared libraries and
 the statically linked verifier for required glibc symbol versions above 2.39.
+
+### Linux musl static SDKs
+
+The [musl workflow](./.github/workflows/build-ffmpeg-musl.yml) builds a shared
+runtime and a static SDK on Alpine 3.22.2 for `linux-musl-x64` (x86-64-v2)
+and `linux-musl-arm64` (ARMv8-A with NEON).
+
+The shared runtime requires musl and bundles `libgcc_s.so.1`. For static
+linking, use a musl GCC toolchain matching the target architecture and the
+pkg-config command above. The SDK supplies `-fPIE` and `-static-pie` for a
+fully static executable. Text subtitle rendering requires
+[fonts and Fontconfig configuration](#subtitle-preview-support).
 
 ## Runtime Loading and Diagnostics
 
@@ -317,10 +332,11 @@ with the repository or uploaded by the workflows.
 - [`.github/workflows/build-ffmpeg-runtime-macos.yml`](./.github/workflows/build-ffmpeg-runtime-macos.yml)
 - [`.github/workflows/build-ffmpeg-runtime-windows.yml`](./.github/workflows/build-ffmpeg-runtime-windows.yml)
 - [`.github/workflows/build-ffmpeg-runtime-linux.yml`](./.github/workflows/build-ffmpeg-runtime-linux.yml)
+- [`.github/workflows/build-ffmpeg-musl.yml`](./.github/workflows/build-ffmpeg-musl.yml)
 
 ## Disc image input
 
-GPL builds statically embed libbluray 1.5.0, libudfread 1.2.0, libdvdread 7.1.1, libdvdnav 7.0.0 and libdvdcss 1.6.0 into `avformat`. Packages still contain only the seven FFmpeg shared libraries; no separate disc DLLs, dylibs or SOs are needed. LGPL builds include only libbluray and libudfread, and do not enable DVD input.
+GPL builds statically embed libbluray 1.5.0, libudfread 1.2.0, libdvdread 7.1.1, libdvdnav 7.0.0 and libdvdcss 1.6.0 into `avformat`. Shared runtime packages require no separate disc DLLs, dylibs or SOs. LGPL builds include only libbluray and libudfread, and do not enable DVD input.
 
 `tools/build_disc_runtime.sh` downloads pinned, SHA-256 checked sources and builds PIC static archives with Meson. `tools/embed_discs.sh` adds the archive objects and the required public exports to avformat. The GUI can resolve its libbluray/libdvdread calls from avformat, just as libass APIs are exposed by avfilter. DVD CSS support is linked directly through libdvdcss rather than relying on a system plugin. No libaacs or libbdplus is bundled; protected Blu-ray input remains unsupported. BD-J, menus, font rendering and XML metadata dependencies are disabled.
 
