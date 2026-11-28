@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Build a self-contained Linux FFmpeg runtime (x64 or arm64):
+# Build a self-contained Linux FFmpeg runtime or musl static SDK (x64 or arm64):
 # - FFmpeg shared objects are packaged
 # - libuavs3d is built as a static dependency and linked into FFmpeg
 # - unexpected external shared-object dependencies are treated as build failures
 # - packaged FFmpeg libraries are rewritten to load sibling .so files from $ORIGIN
 
-FFMPEG_VERSION="${1:?usage: build_ffmpeg_runtime_linux.sh <ffmpeg-version> <gpl|lgpl> [work-root] [linux-x64|linux-arm64] }"
+FFMPEG_VERSION="${1:?usage: build_ffmpeg_runtime_linux.sh <ffmpeg-version> <gpl|lgpl> [work-root] [linux-x64|linux-arm64|linux-musl-x64|linux-musl-arm64]}"
 LICENSE_FLAVOR="${2:?usage: build_ffmpeg_runtime_linux.sh <ffmpeg-version> <gpl|lgpl> [work-root] [linux-x64|linux-arm64] }"
 WORK_ROOT="${3:-$PWD/.ffmpeg-runtime-build-linux-x64}"
 TARGET_ARCH="${4:-}"
@@ -18,8 +18,18 @@ if [[ -z "$TARGET_ARCH" ]]; then
     *) echo "Cannot detect a supported Linux architecture from '$(uname -m)'; pass linux-x64 or linux-arm64 explicitly" >&2; exit 1 ;;
   esac
 fi
+TARGET_IS_MUSL=false
 case "$TARGET_ARCH" in
   linux-x64|linux-arm64)
+    BUILD_ARCH="$TARGET_ARCH"
+    ;;
+  linux-musl-x64)
+    BUILD_ARCH=linux-x64
+    TARGET_IS_MUSL=true
+    ;;
+  linux-musl-arm64)
+    BUILD_ARCH=linux-arm64
+    TARGET_IS_MUSL=true
     ;;
   *)
     echo "Unsupported Linux target architecture: $TARGET_ARCH" >&2
@@ -60,6 +70,7 @@ DAVS2_COMPAT_PATCH_PATH="$REPO_ROOT/patches/davs2-10bit/0002-x86-build-avx-codep
 DAVS2_COLOR_PATCH_PATH="$REPO_ROOT/patches/davs2-10bit/0004-export-sequence-display-color-description.patch"
 DAVS2_MC_PATCH_PATH="$REPO_ROOT/patches/davs2-10bit/0005-x86-10bit-motion-compensation.patch"
 FFMPEG_RUNTIME_PATCH_PATH="$REPO_ROOT/patches/ffmpeg/0001-avs-dra-runtime.patch"
+FFMPEG_MUSL_CAVS_PATCH_PATH="$REPO_ROOT/patches/ffmpeg/0009-musl-cavs-gnu-source.patch"
 FFMPEG_AV3A_PATCH_PATH="$REPO_ROOT/patches/ffmpeg/0002-av3a-demux-probing.patch"
 FFMPEG_AV3A_CONTAINER_PATCH_PATH="$REPO_ROOT/patches/ffmpeg/0003-av3a-container-remux.patch"
 FFMPEG_AV3A_METADATA_PATCH_PATH="$REPO_ROOT/patches/ffmpeg/0006-av3a-stream-metadata.patch"
@@ -76,6 +87,7 @@ RUNTIME_ROOT="$PACKAGE_ROOT"
 ARTIFACT_ROOT="$WORK_ROOT/artifacts"
 PACKAGE_NAME="ffmpeg-runtime-$TARGET_ARCH-$LICENSE_FLAVOR-shared-$FFMPEG_VERSION"
 ARTIFACT_PATH="$ARTIFACT_ROOT/$PACKAGE_NAME.zip"
+STATIC_ARTIFACT_PATH="$ARTIFACT_ROOT/${PACKAGE_NAME/-shared-/-static-}.zip"
 CPU_COUNT="${BUILD_JOBS:-$(nproc)}"
 PKG_CONFIG_BIN="${PKG_CONFIG_BIN:-pkg-config}"
 ENABLE_LIBDAVS2=false
@@ -91,6 +103,50 @@ fi
 # Keep peak compiler memory bounded; an explicit BUILD_JOBS overrides the cap.
 if [[ -z "${BUILD_JOBS:-}" && "$CPU_COUNT" -gt 4 ]]; then
   CPU_COUNT=4
+fi
+
+if [[ "$TARGET_IS_MUSL" == true ]]; then
+  case "$BUILD_ARCH:$(uname -m)" in
+    linux-x64:x86_64|linux-arm64:aarch64) ;;
+    *) echo "musl builds must run natively on the matching target architecture (requested $TARGET_ARCH, host $(uname -m))" >&2; exit 1 ;;
+  esac
+  [[ -f /etc/alpine-release ]] || { echo "musl SDK builds require the pinned Alpine build image" >&2; exit 1; }
+  for tool in apk gcc g++ readelf strace patchelf; do
+    command -v "$tool" >/dev/null || { echo "Missing musl build or verification tool: $tool" >&2; exit 1; }
+  done
+  for tool in cmake ninja meson make curl git gperf nasm pkg-config; do
+    command -v "$tool" >/dev/null || { echo "Missing musl build tool: $tool" >&2; exit 1; }
+  done
+  gcc --version >/dev/null
+  g++ --version >/dev/null
+  cmake --version >/dev/null
+  ninja --version >/dev/null
+  meson --version >/dev/null
+  make --version >/dev/null
+  curl --version >/dev/null
+  git --version >/dev/null
+  gperf --version >/dev/null
+  nasm -v >/dev/null
+  pkg-config --version >/dev/null
+  patchelf --version >/dev/null
+  strace --version >/dev/null
+  compiler_target="$(gcc -dumpmachine)"
+  [[ "$compiler_target" == *linux-musl* ]] || { echo "Compiler is not targeting musl: $compiler_target" >&2; exit 1; }
+  if [[ "${CFLAGS:-} ${CXXFLAGS:-} ${CPPFLAGS:-} ${LDFLAGS:-}" =~ -march=native|-mtune=native ]]; then
+    echo "-march=native and -mtune=native are not allowed in musl SDK builds" >&2
+    exit 1
+  fi
+  if [[ "$BUILD_ARCH" == linux-x64 ]]; then
+    MUSL_CPU_BASELINE="x86-64-v2"
+    MUSL_CPU_FLAGS="-march=x86-64-v2 -mtune=generic"
+  else
+    MUSL_CPU_BASELINE="AArch64 ARMv8-A (Advanced SIMD/NEON)"
+    MUSL_CPU_FLAGS="-march=armv8-a -mtune=generic"
+  fi
+  export CFLAGS="${CFLAGS:+$CFLAGS }$MUSL_CPU_FLAGS"
+  export CXXFLAGS="${CXXFLAGS:+$CXXFLAGS }$MUSL_CPU_FLAGS"
+  echo "Musl compiler target: $compiler_target"
+  echo "CPU baseline: $MUSL_CPU_BASELINE ($MUSL_CPU_FLAGS)"
 fi
 
 LIBRARY_NAMES=(
@@ -121,6 +177,10 @@ esac
 SYSTEM_SO_PATTERNS+=(linux-vdso.so.1)
 
 mkdir -p "$SOURCE_ROOT" "$INSTALL_ROOT" "$RUNTIME_ROOT" "$ARTIFACT_ROOT"
+if [[ "$TARGET_IS_MUSL" == true ]]; then
+  rm -f -- "$ARTIFACT_PATH" "$STATIC_ARTIFACT_PATH" \
+    "$ARTIFACT_ROOT/$PACKAGE_NAME.manifest.txt" "$ARTIFACT_ROOT/${PACKAGE_NAME/-shared-/-static-}.manifest.txt"
+fi
 
 if [[ ! -f "$SOURCE_ARCHIVE" ]]; then
   curl -fL --retry 3 "$SOURCE_URL" -o "$SOURCE_ARCHIVE"
@@ -132,6 +192,10 @@ tar -xf "$SOURCE_ARCHIVE" -C "$SOURCE_ROOT"
 # Apply exactly to this extracted tree, even when WORK_ROOT is inside this repository.
 patch -d "$SOURCE_DIR" -p1 --batch --forward --fuzz=0 --dry-run <"$FFMPEG_RUNTIME_PATCH_PATH" >/dev/null
 patch -d "$SOURCE_DIR" -p1 --batch --forward --fuzz=0 <"$FFMPEG_RUNTIME_PATCH_PATH"
+if [[ "$TARGET_IS_MUSL" == true ]]; then
+  patch -d "$SOURCE_DIR" -p1 --batch --forward --fuzz=0 --dry-run <"$FFMPEG_MUSL_CAVS_PATCH_PATH" >/dev/null
+  patch -d "$SOURCE_DIR" -p1 --batch --forward --fuzz=0 <"$FFMPEG_MUSL_CAVS_PATCH_PATH"
+fi
 # AV3A 只增加探测和帧头解析，不依赖音频解码 SDK。
 patch -d "$SOURCE_DIR" -p1 --batch --forward --fuzz=0 --dry-run <"$FFMPEG_AV3A_PATCH_PATH" >/dev/null
 patch -d "$SOURCE_DIR" -p1 --batch --forward --fuzz=0 <"$FFMPEG_AV3A_PATCH_PATH"
@@ -180,7 +244,7 @@ if [[ ! -f "$UAVS3D_INSTALL_ROOT/lib/libuavs3d.a" ]]; then
   exit 1
 fi
 
-if [[ "$TARGET_ARCH" == "linux-arm64" ]]; then
+if [[ "$BUILD_ARCH" == "linux-arm64" ]]; then
   # CMake 架构分支若未命中会静默退回 generic C；以 NEON 符号计数确认优化代码进入产物。
   neon_symbols="$(nm "$UAVS3D_INSTALL_ROOT/lib/libuavs3d.a" 2>/dev/null | grep -c ' T uavs3d_.*_arm64')"
   if [[ "$neon_symbols" -lt 40 ]]; then
@@ -220,7 +284,7 @@ if [[ "$LICENSE_FLAVOR" == "gpl" ]]; then
   git -C "$DAVS2_SOURCE_DIR" checkout --detach FETCH_HEAD
 
   # AArch64 使用 NEON intrinsics 补丁组；x86_64 保留 AVX2 运动补偿补丁。
-  if [[ "$TARGET_ARCH" == "linux-arm64" ]]; then
+  if [[ "$BUILD_ARCH" == "linux-arm64" ]]; then
     DAVS2_PATCHES=("$DAVS2_PATCH_PATH" "$DAVS2_COMPAT_PATCH_PATH")
     for davs2_arm_patch in "$REPO_ROOT"/patches/davs2-10bit/aarch64/*.patch; do
       DAVS2_PATCHES+=("$davs2_arm_patch")
@@ -263,7 +327,7 @@ if [[ "$LICENSE_FLAVOR" == "gpl" ]]; then
   # 上游 fork 未附带 aarch64 汇编源文件；禁用汇编后 Makefile 跳过该分支，
   # NEON 由 intrinsics 补丁经 ARCH_AARCH64 守卫提供（与 macOS arm64 一致）。
   DAVS2_CONFIGURE_FLAGS=(--prefix="$DAVS2_INSTALL_ROOT" --disable-cli --enable-pic --bit-depth=10)
-  if [[ "$TARGET_ARCH" == "linux-arm64" ]]; then
+  if [[ "$BUILD_ARCH" == "linux-arm64" ]]; then
     DAVS2_CONFIGURE_FLAGS+=(--disable-asm)
   fi
   ./configure "${DAVS2_CONFIGURE_FLAGS[@]}"
@@ -307,10 +371,19 @@ fi
 # 将 libass 及字体、排版依赖静态合入 avfilter，并导出字幕公开接口。
 PKG_CONFIG_BIN="$PKG_CONFIG_BIN" bash "$SCRIPT_DIR/build_subtitle_runtime.sh" linux "$WORK_ROOT" "$CPU_COUNT"
 bash "$SCRIPT_DIR/embed_libass.sh" "$SOURCE_DIR" "$SUBTITLE_INSTALL_ROOT"
-PKG_CONFIG_BIN="$PKG_CONFIG_BIN" bash "$SCRIPT_DIR/build_disc_runtime.sh" linux "$LICENSE_FLAVOR" "$WORK_ROOT" "$CPU_COUNT"
+if [[ "$TARGET_IS_MUSL" == true ]]; then
+  DISC_CFLAGS="${CFLAGS:+$CFLAGS }-D_LARGEFILE64_SOURCE"
+  PKG_CONFIG_BIN="$PKG_CONFIG_BIN" CFLAGS="$DISC_CFLAGS" bash "$SCRIPT_DIR/build_disc_runtime.sh" linux "$LICENSE_FLAVOR" "$WORK_ROOT" "$CPU_COUNT"
+else
+  PKG_CONFIG_BIN="$PKG_CONFIG_BIN" bash "$SCRIPT_DIR/build_disc_runtime.sh" linux "$LICENSE_FLAVOR" "$WORK_ROOT" "$CPU_COUNT"
+fi
 bash "$SCRIPT_DIR/embed_discs.sh" "$SOURCE_DIR" "$DISC_INSTALL_ROOT" "$LICENSE_FLAVOR"
 
-PKG_CONFIG_BIN="$PKG_CONFIG_BIN" bash "$SCRIPT_DIR/build_encoder_runtime.sh" linux "$LICENSE_FLAVOR" "$WORK_ROOT" "$CPU_COUNT" "$TARGET_ARCH"
+if [[ "$TARGET_IS_MUSL" == true ]]; then
+  ENCODER_MUSL_PROFILE=true PKG_CONFIG_BIN="$PKG_CONFIG_BIN" bash "$SCRIPT_DIR/build_encoder_runtime.sh" linux "$LICENSE_FLAVOR" "$WORK_ROOT" "$CPU_COUNT" "$BUILD_ARCH"
+else
+  PKG_CONFIG_BIN="$PKG_CONFIG_BIN" bash "$SCRIPT_DIR/build_encoder_runtime.sh" linux "$LICENSE_FLAVOR" "$WORK_ROOT" "$CPU_COUNT" "$BUILD_ARCH"
+fi
 source "$ENCODER_INSTALL_ROOT/ffmpeg-options.sh"
 
 PKG_CONFIG_PATH_ENTRIES=("$ENCODER_INSTALL_ROOT/lib/pkgconfig" "$UAVS3D_INSTALL_ROOT/lib/pkgconfig" "$SUBTITLE_INSTALL_ROOT/lib/pkgconfig" "$DISC_INSTALL_ROOT/lib/pkgconfig")
@@ -327,17 +400,21 @@ export CPPFLAGS="${CPPFLAGS_ENTRIES[*]}${CPPFLAGS:+ $CPPFLAGS}"
 
 pushd "$SOURCE_DIR" >/dev/null
 
+FFMPEG_LINKAGE_FLAGS=(--enable-shared --enable-static)
+FFMPEG_RUNTIME_FLAGS=(-static-libgcc)
+if [[ "$TARGET_IS_MUSL" == true ]]; then
+  FFMPEG_RUNTIME_FLAGS+=(-static-libstdc++)
+fi
 CONFIGURE_FLAGS=(
   --prefix="$INSTALL_ROOT"
-  --arch="$([[ "$TARGET_ARCH" == "linux-arm64" ]] && echo aarch64 || echo x86_64)"
+  --arch="$([[ "$BUILD_ARCH" == "linux-arm64" ]] && echo aarch64 || echo x86_64)"
   --target-os=linux
   --cc=gcc
   --cxx=g++
   --pkg-config="$PKG_CONFIG_BIN"
   --pkg-config-flags=--static
-  --enable-shared
+  "${FFMPEG_LINKAGE_FLAGS[@]}"
   --enable-pthreads
-  --enable-static
   --disable-programs
   --disable-doc
   --disable-debug
@@ -352,11 +429,14 @@ CONFIGURE_FLAGS=(
   --disable-indevs
   --disable-outdevs
   --disable-devices
-  --extra-ldflags=-static-libgcc
+  "--extra-ldflags=${FFMPEG_RUNTIME_FLAGS[*]}"
 )
 
 if [[ "$LICENSE_FLAVOR" == "gpl" ]]; then
   CONFIGURE_FLAGS+=(--enable-gpl --enable-version3 --enable-libdvdread --enable-libdvdnav)
+fi
+if [[ "$TARGET_IS_MUSL" == true ]]; then
+  CONFIGURE_FLAGS+=(--disable-hwaccels)
 fi
 
 CONFIGURE_FLAGS+=("${SOFTWARE_ENCODER_FLAGS[@]}")
@@ -379,6 +459,135 @@ make -j"$CPU_COUNT"
 make install
 
 popd >/dev/null
+
+if [[ "$TARGET_IS_MUSL" == true ]]; then
+  for component in avutil avcodec avformat avfilter avdevice swscale swresample; do
+    if [[ ! -s "$INSTALL_ROOT/lib/lib$component.a" ]]; then
+      echo "Missing expected FFmpeg static archive: lib$component.a" >&2
+      exit 1
+    fi
+  done
+
+  LIBGCC_S_PATH="$(gcc -print-file-name=libgcc_s.so.1)"
+  if [[ "$LIBGCC_S_PATH" == libgcc_s.so.1 || ! -s "$LIBGCC_S_PATH" ]]; then
+    echo "The musl GCC toolchain is missing libgcc_s.so.1" >&2
+    exit 1
+  fi
+  if ! readelf -d "$LIBGCC_S_PATH" | grep -Fq "[libgcc_s.so.1]"; then
+    echo "Unexpected musl GCC runtime SONAME: $LIBGCC_S_PATH" >&2
+    exit 1
+  fi
+
+  {
+    echo "Alpine release: $(cat /etc/alpine-release)"
+    echo "Build image: alpine:3.22.2"
+    echo "FFmpeg source revision: n$FFMPEG_VERSION"
+    echo "Installed Alpine package versions:"
+    apk info -v | sort
+    echo
+    echo "Musl runtime package: $(apk info -v musl)"
+    echo "Musl development package: $(apk info -v musl-dev)"
+    echo "GCC runtime package: $(apk info -v libgcc)"
+    echo "Compiler target: $(gcc -dumpmachine)"
+    echo "C compiler: $(gcc --version | head -n 1)"
+    echo "C++ compiler: $(g++ --version | head -n 1)"
+    echo "Binutils: $(ar --version | head -n 1)"
+    echo "CMake: $(cmake --version | head -n 1)"
+    echo "Ninja: $(ninja --version)"
+    echo "Meson: $(meson --version)"
+    echo "Make: $(make --version | head -n 1)"
+    echo "NASM: $(nasm -v)"
+    echo "patchelf: $(patchelf --version)"
+    echo "strace: $(strace --version | head -n 1)"
+    echo "Git: $(git --version)"
+    echo "curl: $(curl --version | head -n 1)"
+    echo "pkg-config: $(pkg-config --version)"
+    echo "CPU baseline: $MUSL_CPU_BASELINE"
+    echo "C/C++ target flags: $MUSL_CPU_FLAGS"
+    echo "libuavs3d revision: $(git -C "$UAVS3D_SOURCE_DIR" rev-parse HEAD)"
+    echo "libuavs3d version: $(pkg-config --modversion uavs3d)"
+    echo "GCC shared runtime SHA-256:"
+    sha256sum "$LIBGCC_S_PATH"
+    echo "Blu-ray dependencies: libbluray 1.5.0, libudfread 1.2.0"
+    if [[ "$ENABLE_LIBDAVS2" == true ]]; then
+      echo "libdavs2 revision: $(git -C "$DAVS2_SOURCE_DIR" rev-parse HEAD)"
+      echo "libdavs2 version: 1.6.0"
+      echo "DVD dependencies: libdvdread 7.1.1, libdvdnav 7.0.0, libdvdcss 1.6.0"
+    fi
+    echo
+    echo "Source archive SHA-256:"
+    (
+      cd "$WORK_ROOT"
+      find . -type f \( -name '*.tar.gz' -o -name '*.tar.xz' -o -name '*.tar.bz2' \) -print |
+        sort | while IFS= read -r archive; do sha256sum "$archive"; done
+    )
+    echo
+    echo "Repository patch SHA-256:"
+    (
+      cd "$REPO_ROOT"
+      find patches -type f -name '*.patch' -print |
+        sort | while IFS= read -r patch_path; do sha256sum "$patch_path"; done
+    )
+  } > "$WORK_ROOT/musl-toolchain-manifest.txt"
+
+  for library_name in "${LIBRARY_NAMES[@]}"; do
+    source_path="$INSTALL_ROOT/lib/$library_name"
+    if [[ ! -f "$source_path" ]]; then
+      echo "Missing expected FFmpeg runtime library: $library_name" >&2
+      exit 1
+    fi
+    cp -L "$source_path" "$RUNTIME_ROOT/$library_name"
+  done
+  cp -L "$LIBGCC_S_PATH" "$RUNTIME_ROOT/libgcc_s.so.1"
+  for so_file in "$RUNTIME_ROOT"/*.so.*; do
+    patchelf --set-rpath '$ORIGIN' "$so_file"
+  done
+
+  {
+    echo "FFmpeg version: $FFMPEG_VERSION"
+    echo "Target architecture: $TARGET_ARCH"
+    echo "License flavor: $LICENSE_FLAVOR"
+    sed -n 's/^FFMPEG_CONFIGURATION=/Configure flags: /p' "$SOURCE_DIR/ffbuild/config.mak" |
+      sed -e "s|$INSTALL_ROOT|<install-root>|g" -e "s|$WORK_ROOT|<work-root>|g"
+    cat "$WORK_ROOT/encoder-install/versions.txt" "$WORK_ROOT/subtitle-install/versions.txt"
+    cat "$WORK_ROOT/musl-toolchain-manifest.txt"
+    echo "Bundled shared objects:"
+    find "$RUNTIME_ROOT" -maxdepth 1 -type f -name '*.so.*' -print | sort
+    echo "Dependency report:"
+    for so_file in "$RUNTIME_ROOT"/*.so.*; do
+      echo "## $(basename "$so_file")"
+      readelf -d "$so_file"
+    done
+  } > "$ARTIFACT_ROOT/$PACKAGE_NAME.manifest.txt"
+
+  for so_file in "$RUNTIME_ROOT"/*.so.*; do
+    while IFS= read -r dependency; do
+      [[ -n "$dependency" ]] || continue
+      case "$dependency" in
+        libc.musl-x86_64.so.1|libc.musl-aarch64.so.1|linux-vdso.so.1) ;;
+        libgcc_s.so.1)
+          [[ -f "$RUNTIME_ROOT/$dependency" ]] || { echo "Missing bundled GCC runtime dependency: $dependency" >&2; exit 1; }
+          ;;
+        libavutil.so.61|libswresample.so.7|libswscale.so.10|libavcodec.so.63|libavformat.so.63|libavfilter.so.12|libavdevice.so.63)
+          [[ -f "$RUNTIME_ROOT/$dependency" ]] || { echo "Missing bundled FFmpeg dependency: $dependency" >&2; exit 1; }
+          ;;
+        *) echo "Unexpected external dependency in $(basename "$so_file"): $dependency" >&2; exit 1 ;;
+      esac
+    done < <(readelf -d "$so_file" | awk '/NEEDED/{gsub(/\[|\]/, "", $5); print $5}' | sort -u)
+  done
+
+  rm -f -- "$ARTIFACT_PATH"
+  (
+    cd "$RUNTIME_ROOT"
+    zip -qj "$ARTIFACT_PATH" ./*.so.*
+  )
+  echo "Created artifact: $ARTIFACT_PATH"
+
+  bash "$SCRIPT_DIR/package_ffmpeg_static.sh" linux-musl "$FFMPEG_VERSION" "$LICENSE_FLAVOR" \
+    "$WORK_ROOT" "$INSTALL_ROOT" "$SOURCE_DIR/ffbuild/config.mak" \
+    "$STATIC_ARTIFACT_PATH" "$TARGET_ARCH"
+  exit 0
+fi
 
 for library_name in "${LIBRARY_NAMES[@]}"; do
   source_path="$INSTALL_ROOT/lib/$library_name"
@@ -477,4 +686,4 @@ echo "Created artifact: $ARTIFACT_PATH"
 
 bash "$SCRIPT_DIR/package_ffmpeg_static.sh" linux "$FFMPEG_VERSION" "$LICENSE_FLAVOR" \
   "$WORK_ROOT" "$INSTALL_ROOT" "$SOURCE_DIR/ffbuild/config.mak" \
-  "$ARTIFACT_ROOT/${PACKAGE_NAME/-shared-/-static-}.zip"
+  "$STATIC_ARTIFACT_PATH"

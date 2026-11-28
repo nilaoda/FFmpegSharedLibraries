@@ -127,6 +127,7 @@ int main(int argc, char **argv)
     int ret, stream, export_pos, frame_limit = 64;
     char error[AV_ERROR_MAX_STRING_SIZE];
 
+    setvbuf(stdout, NULL, _IONBF, 0);
     printf("FFmpeg=%s avcodec=%u avformat=%u avutil=%u\n", av_version_info(),
            avcodec_version() >> 16, avformat_version() >> 16, avutil_version() >> 16);
     if (avcodec_version() >> 16 != 63 || avformat_version() >> 16 != 63 ||
